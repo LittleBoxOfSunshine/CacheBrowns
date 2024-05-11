@@ -612,20 +612,33 @@ mod tests {
         assert!(!store.0.contains(&VALID_DATA2_KEY));
     }
 
+    fn non_volatile_from_path(
+        dir: &TempDir,
+    ) -> Result<
+        (
+            DiscreteFileStoreNonVolatile<
+                u32,
+                Record<u32, u32>,
+                JsonDiscreteFileSerializerDeserializer<Record<u32, u32>>,
+            >,
+            impl Iterator<Item = PathBuf> + Sized + '_,
+        ),
+        Error,
+    > {
+        DiscreteFileStoreNonVolatileJson::new(dir.path())
+    }
+
     #[test]
     fn non_volatile_rehydrate_duplicate_key_err() {
         let dir = create_with_valid_file();
-        create_valid_data_1_in_dir(&dir);
+        create_valid_data_1_in_dir(&dir, "z");
+        assert!(non_volatile_from_path(&dir).is_err());
     }
 
     #[test]
     fn non_volatile_rehydrate_from_empty() {
         let dir = TempDir::new("test").unwrap();
-        let store: DiscreteFileStoreNonVolatile<
-            u32,
-            Record<u32, u32>,
-            JsonDiscreteFileSerializerDeserializer<Record<u32, u32>>,
-        > = DiscreteFileStoreNonVolatileJson::new(dir.path()).unwrap().0;
+        let store = non_volatile_from_path(&dir).unwrap().0;
         assert_eq!(0, store.keys().count());
     }
 
@@ -692,14 +705,14 @@ mod tests {
         create_files(DiscreteFileStoreNonVolatileJson::new, with_only_valid_data)
     }
 
-    fn create_valid_data_1_in_dir(dir: &TempDir) {
-        let mut file1 = File::create(dir.path().join("a")).unwrap();
+    fn create_valid_data_1_in_dir(dir: &TempDir, name: &str) {
+        let mut file1 = File::create(dir.path().join(name)).unwrap();
         file1.write_all(VALID_DATA1.as_bytes()).unwrap();
     }
 
     fn create_with_valid_file() -> TempDir {
         let dir = TempDir::new("test").unwrap();
-        create_valid_data_1_in_dir(&dir);
+        create_valid_data_1_in_dir(&dir, "a");
         dir
     }
 
