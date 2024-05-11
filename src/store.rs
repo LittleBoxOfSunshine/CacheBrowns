@@ -1,8 +1,6 @@
 use crate::CacheBrownsResult;
 use itertools::Itertools;
 use std::borrow::{Borrow, Cow};
-use std::marker::PhantomData;
-use std::vec;
 
 pub mod discrete_files;
 pub mod memory;

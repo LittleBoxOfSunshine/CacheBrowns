@@ -495,7 +495,7 @@ mod tests {
         store.put(2, 1);
 
         let deleted_keys: BTreeSet<u32> = store.flush().map(|x| x.unwrap().unwrap()).collect();
-        assert_equal(BTreeSet::from_iter(vec![0, 1, 2].into_iter()), deleted_keys);
+        assert_equal(BTreeSet::from_iter(vec![0, 1, 2]), deleted_keys);
         assert_eq!(0, store.index.borrow().len());
         assert_eq!(0, store.store.keys().len());
     }

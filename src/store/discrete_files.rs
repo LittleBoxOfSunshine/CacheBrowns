@@ -403,7 +403,7 @@ mod tests {
     use std::fs;
     use std::fs::File;
     use std::io::{Error, ErrorKind, Write};
-    use std::path::{Path, PathBuf};
+    use std::path::{PathBuf};
     use tempdir::TempDir;
 
     const VALID_DATA1_KEY: u32 = 42;
@@ -608,7 +608,7 @@ mod tests {
 
     #[test]
     fn non_volatile_rehydrate_corrupt_data_dropped() {
-        let (mut store, dir) = create_non_volatile_scenario(false).unwrap();
+        let (store, dir) = create_non_volatile_scenario(false).unwrap();
         assert!(store.0.contains(&VALID_DATA1_KEY));
         assert_eq!(
             VALID_DATA1_KEY,
@@ -674,7 +674,7 @@ mod tests {
 
     fn create_volatile_scenario(
     ) -> Result<(DiscreteFileStoreVolatileJson<u32, u32>, TempDir), Error> {
-        create_files(|path| DiscreteFileStoreVolatileJson::new(path), true)
+        create_files(DiscreteFileStoreVolatileJson::new, true)
     }
 
     fn create_non_volatile_scenario(
@@ -694,7 +694,7 @@ mod tests {
         Error,
     > {
         create_files(
-            |path| DiscreteFileStoreNonVolatileJson::new(path),
+            DiscreteFileStoreNonVolatileJson::new,
             with_only_valid_data,
         )
     }

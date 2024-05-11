@@ -188,13 +188,13 @@ mod tests {
     #[test]
     fn stop_tracking_propagates() {
         let key = 42;
-        let key_clone = key.clone();
+        let key_clone = key;
 
         let (mut store, data_source) = base_fakes();
         store
             .expect_delete()
             .withf(move |key_in: &i32| *key_in == key_clone)
-            .returning(|key| Ok(Some(key.clone())));
+            .returning(|key| Ok(Some(*key)));
 
         let store = MockStoreWrapper::new(store);
         let data_source = MockSorWrapper::new(data_source);
