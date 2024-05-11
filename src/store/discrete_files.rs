@@ -403,7 +403,7 @@ mod tests {
     use std::fs;
     use std::fs::File;
     use std::io::{Error, ErrorKind, Write};
-    use std::path::{PathBuf};
+    use std::path::PathBuf;
     use tempdir::TempDir;
 
     const VALID_DATA1_KEY: u32 = 42;
@@ -416,11 +416,6 @@ mod tests {
     ) {
         let (mut store, dir) = empty_volatile_store();
         f(&mut store, &dir);
-    }
-
-    fn validate_against_volatile2<F: Fn(&mut DiscreteFileStoreVolatileJson<u32, u32>)>(f: F) {
-        let (mut store, dir) = empty_volatile_store();
-        f(&mut store);
     }
 
     fn validate_against_non_volatile<
@@ -566,17 +561,17 @@ mod tests {
 
     #[test]
     fn delete() {
-        validate_against_volatile(|store, dir| {
+        validate_against_volatile(|store, _dir| {
             delete!(store);
         });
-        validate_against_non_volatile(|store, dir| {
+        validate_against_non_volatile(|store, _dir| {
             delete!(store);
         });
     }
 
     #[test]
     fn volatile_store_clears_pre_existing_data() {
-        let (store, dir) = create_volatile_scenario().unwrap();
+        let (store, _dir) = create_volatile_scenario().unwrap();
         assert_eq!(0, store.keys().count());
     }
 
@@ -596,7 +591,7 @@ mod tests {
 
     #[test]
     fn non_volatile_rehydrates() {
-        let (store, dir) = create_non_volatile_scenario(true).unwrap();
+        let (store, _dir) = create_non_volatile_scenario(true).unwrap();
         assert!(store.0.contains(&VALID_DATA1_KEY));
         assert_eq!(
             VALID_DATA1_KEY,
@@ -608,7 +603,7 @@ mod tests {
 
     #[test]
     fn non_volatile_rehydrate_corrupt_data_dropped() {
-        let (store, dir) = create_non_volatile_scenario(false).unwrap();
+        let (store, _dir) = create_non_volatile_scenario(false).unwrap();
         assert!(store.0.contains(&VALID_DATA1_KEY));
         assert_eq!(
             VALID_DATA1_KEY,
@@ -693,10 +688,7 @@ mod tests {
         ),
         Error,
     > {
-        create_files(
-            DiscreteFileStoreNonVolatileJson::new,
-            with_only_valid_data,
-        )
+        create_files(DiscreteFileStoreNonVolatileJson::new, with_only_valid_data)
     }
 
     fn create_valid_data_1_in_dir(dir: &TempDir) {

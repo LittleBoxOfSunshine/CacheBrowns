@@ -1,5 +1,4 @@
 use crate::CacheBrownsResult;
-use itertools::Itertools;
 use std::borrow::{Borrow, Cow};
 
 pub mod discrete_files;
