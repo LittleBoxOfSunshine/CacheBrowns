@@ -2,6 +2,7 @@ use crate::hydration::{CacheLookupSuccess, Hydrator, StoreResult};
 use crate::source_of_record::SourceOfRecord;
 use crate::store::Store;
 use crate::CacheBrownsResult;
+use std::borrow::Borrow;
 
 /// [`PullCacheHydrator`] hydrates the cache by immediately calling out to the [`SourceOfRecord`]
 /// any time data is missing or stale to attempt to provide current data.
@@ -26,15 +27,15 @@ where
     type Value = V;
     type FlushResultIterator = S::FlushResultIterator;
 
-    fn get(&mut self, key: &Self::Key) -> Option<CacheLookupSuccess<Self::Value>> {
+    fn get<Q: Borrow<Self::Key>>(&mut self, key: &Q) -> Option<CacheLookupSuccess<Self::Value>> {
         match self.store.get(key) {
             Some(value) => {
                 let value = value.into_owned();
-                self.try_use_cached_value(key, value)
+                self.try_use_cached_value(key.borrow(), value)
             }
             None => match self.data_source.retrieve(key) {
                 Some(value) => {
-                    self.store.put((*key).clone(), value.clone());
+                    self.store.put(key.borrow().clone(), value.clone());
                     Some(CacheLookupSuccess::new(StoreResult::NotFound, true, value))
                 }
                 None => None,
@@ -88,113 +89,117 @@ where
     }
 }
 
-// #[cfg(test)]
-// mod tests {
-//     use crate::hydration::pull::PullCacheHydrator;
-//     use crate::hydration::{CacheLookupSuccess, Hydrator};
-//     use crate::source_of_record::MockVecBasedSor;
-//     use crate::source_of_record::RetrieveWithHintResponse::{Fresh, Hint};
-//     use crate::store::MockVecStore;
-//
-//     fn base_fakes() -> (MockVecStore<String, i32>, MockVecBasedSor<String, i32>) {
-//         (MockVecStore::new(), MockVecBasedSor::new())
-//     }
-//
-//     #[test]
-//     fn not_found_retrieves_valid_and_hydrates() {
-//         let (mut store, mut data_source) = base_fakes();
-//         store.expect_get().return_const(None);
-//         store.expect_get().return_const(Some(42));
-//         // Validate hydration occurred.
-//         store
-//             .expect_put()
-//             .once()
-//             .withf(|key, value| key == "foo" && *value == 42)
-//             .return_const(());
-//
-//         data_source.expect_retrieve().return_once(|_key| Some(42));
-//
-//         assert_eq!(
-//             Some(CacheLookupSuccess::Miss(42i32)),
-//             PullCacheHydrator::new(store, data_source).get(&"foo".to_string())
-//         );
-//     }
-//
-//     #[test]
-//     fn not_found_retrieves_invalid() {
-//         let (mut store, mut data_source) = base_fakes();
-//         store.expect_get().return_once(|_key| None);
-//
-//         data_source.expect_retrieve().return_once(|_key| None);
-//
-//         assert_eq!(
-//             None,
-//             PullCacheHydrator::new(store, data_source).get(&"foo".to_string())
-//         );
-//     }
-//
-//     #[test]
-//     fn found_returns_with_proper_metadata() {
-//         let (mut store, mut data_source) = base_fakes();
-//         store.expect_get().times(3).return_const(Some(42i32));
-//
-//         data_source.expect_is_valid().once().return_const(true);
-//
-//         // Simulate value going stale before second read with a failed retrieve.
-//         data_source.expect_is_valid().return_const(false);
-//         data_source
-//             .expect_retrieve_with_hint()
-//             .once()
-//             .return_const(Hint(42i32));
-//
-//         // Stale value, but successfully refreshed this time
-//         data_source.expect_is_valid().return_const(false);
-//         data_source
-//             .expect_retrieve_with_hint()
-//             .once()
-//             .return_const(Fresh(55i32));
-//         store.expect_put().once().return_const(());
-//
-//         let mut hydrator = PullCacheHydrator::new(store, data_source);
-//
-//         assert_eq!(
-//             Some(CacheLookupSuccess::Hit(42)),
-//             hydrator.get(&"foo".to_string())
-//         );
-//
-//         assert_eq!(
-//             Some(CacheLookupSuccess::Stale(42)),
-//             hydrator.get(&"foo".to_string())
-//         );
-//
-//         assert_eq!(
-//             Some(CacheLookupSuccess::Refresh(55)),
-//             hydrator.get(&"foo".to_string())
-//         );
-//     }
-//
-//     #[test]
-//     fn flush_propagates() {
-//         let (mut store, data_source) = base_fakes();
-//         store.expect_flush().once().returning(|| vec![].into_iter());
-//
-//         let mut hydrator = PullCacheHydrator::new(store, data_source);
-//         assert_eq!(0, hydrator.flush().len());
-//     }
-//
-//     #[test]
-//     fn stop_tracking_propagates() {
-//         let key = "foo".to_string();
-//         let key_clone = key.clone();
-//
-//         let (mut store, data_source) = base_fakes();
-//         store
-//             .expect_delete()
-//             .withf(move |key_in: &String| *key_in == key_clone)
-//             .returning(|key| Ok(Some(key.clone())));
-//
-//         let mut hydrator = PullCacheHydrator::new(store, data_source);
-//
-//         hydrator.stop_tracking(&key).unwrap()
-//     }
-// }
+#[cfg(test)]
+mod tests {
+    use crate::hydration::pull::PullCacheHydrator;
+    use crate::hydration::{CacheLookupSuccess, Hydrator};
+    use crate::source_of_record::test_helpers::{MockSor, MockSorWrapper};
+    use crate::store::test_helpers::{MockStore, MockStoreWrapper};
+    use std::borrow::Cow;
+    use std::vec;
+
+    fn base_fakes() -> (MockStore, MockSor) {
+        (MockStore::new(), MockSor::new())
+    }
+
+    #[test]
+    fn not_found_retrieves_valid_and_hydrates() {
+        let (mut store, mut data_source) = base_fakes();
+        store.expect_get().return_const(None);
+        store.expect_get().return_const(Some(Cow::Owned(42)));
+        // Validate hydration occurred.
+        store
+            .expect_put()
+            .once()
+            .withf(|key, value| key == &42 && *value == 42)
+            .return_const(());
+
+        data_source.expect_retrieve().return_once(|_key| Some(42));
+
+        let store = MockStoreWrapper::new(store);
+        let data_source = MockSorWrapper::new(data_source);
+
+        assert_eq!(
+            Some(CacheLookupSuccess::Miss(42)),
+            PullCacheHydrator::new(store, data_source).get(&42)
+        );
+    }
+
+    #[test]
+    fn not_found_retrieves_invalid() {
+        let (mut store, mut data_source) = base_fakes();
+        store.expect_get().return_once(|_key| None);
+
+        data_source.expect_retrieve().return_once(|_key| None);
+
+        let store = MockStoreWrapper::new(store);
+        let data_source = MockSorWrapper::new(data_source);
+
+        assert_eq!(None, PullCacheHydrator::new(store, data_source).get(&42));
+    }
+
+    #[test]
+    fn found_returns_with_proper_metadata() {
+        let (mut store, mut data_source) = base_fakes();
+        store
+            .expect_get()
+            .times(3)
+            .return_const(Some(Cow::Owned(42)));
+
+        data_source.expect_is_valid().once().return_const(true);
+
+        // Simulate value going stale before second read with a failed retrieve.
+        data_source.expect_is_valid().return_const(false);
+        data_source
+            .expect_retrieve_with_hint()
+            .once()
+            .return_const(None);
+
+        // Stale value, but successfully refreshed this time
+        data_source.expect_is_valid().return_const(false);
+        data_source
+            .expect_retrieve_with_hint()
+            .once()
+            .return_const(Some(55));
+        store.expect_put().once().return_const(());
+
+        let store = MockStoreWrapper::new(store);
+        let data_source = MockSorWrapper::new(data_source);
+        let mut hydrator = PullCacheHydrator::new(store, data_source);
+
+        assert_eq!(Some(CacheLookupSuccess::Hit(42)), hydrator.get(&42));
+
+        assert_eq!(Some(CacheLookupSuccess::Stale(42)), hydrator.get(&42));
+
+        assert_eq!(Some(CacheLookupSuccess::Refresh(55)), hydrator.get(&42));
+    }
+
+    #[test]
+    fn flush_propagates() {
+        let (mut store, data_source) = base_fakes();
+        store.expect_flush().once().returning(|| vec![].into_iter());
+
+        let store = MockStoreWrapper::new(store);
+        let data_source = MockSorWrapper::new(data_source);
+        let mut hydrator = PullCacheHydrator::new(store, data_source);
+        assert_eq!(0, hydrator.flush().len());
+    }
+
+    #[test]
+    fn stop_tracking_propagates() {
+        let key = 42;
+        let key_clone = key.clone();
+
+        let (mut store, data_source) = base_fakes();
+        store
+            .expect_delete()
+            .withf(move |key_in: &i32| *key_in == key_clone)
+            .returning(|key| Ok(Some(key.clone())));
+
+        let store = MockStoreWrapper::new(store);
+        let data_source = MockSorWrapper::new(data_source);
+        let mut hydrator = PullCacheHydrator::new(store, data_source);
+
+        hydrator.stop_tracking(&42).unwrap()
+    }
+}

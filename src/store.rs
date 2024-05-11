@@ -1,10 +1,15 @@
 use crate::CacheBrownsResult;
+use itertools::Itertools;
 use std::borrow::{Borrow, Cow};
+use std::marker::PhantomData;
+use std::vec;
 
 pub mod discrete_files;
 pub mod memory;
 pub mod replacement;
 mod tiered;
+
+// TODO: Demonstrate integration with fast external store like: https://crates.io/crates/scc
 
 /// A [`Store`] is the base layer of a [`super::managed_cache::ManagedCache`] that handles the
 /// storage of data. The actual representation of the underlying data is arbitrary, and higher
@@ -103,4 +108,97 @@ pub trait Store {
     /// Checks if the key is in the store. This is a momentary check that may be invalidated; not
     /// thread safe. It is the responsibility of the owning layer to maintain concurrency safety.
     fn contains<Q: Borrow<Self::Key>>(&self, key: &Q) -> bool;
+}
+
+#[cfg(test)]
+pub mod test_helpers {
+    use super::*;
+    use mockall::automock;
+    use std::vec;
+
+    pub struct Store {}
+
+    #[automock]
+    impl Store {
+        pub fn get<'a>(&self, _key: &i32) -> Option<Cow<'a, i32>> {
+            unimplemented!()
+        }
+
+        pub fn peek<'a>(&self, _key: &i32) -> Option<Cow<'a, i32>> {
+            unimplemented!()
+        }
+
+        pub fn put(&mut self, _key: i32, _value: i32) {
+            unimplemented!()
+        }
+
+        pub fn delete(&mut self, _key: &i32) -> CacheBrownsResult<Option<i32>> {
+            unimplemented!()
+        }
+
+        pub fn flush(&mut self) -> vec::IntoIter<CacheBrownsResult<Option<i32>>> {
+            unimplemented!()
+        }
+
+        pub fn keys(&self) -> vec::IntoIter<&'static i32> {
+            unimplemented!()
+        }
+
+        pub fn contains(&self, _key: &i32) -> bool {
+            unimplemented!()
+        }
+    }
+
+    pub struct MockStoreWrapper {
+        inner: MockStore,
+    }
+
+    impl MockStoreWrapper {
+        pub fn new(inner: MockStore) -> Self {
+            Self { inner }
+        }
+    }
+
+    impl super::Store for MockStoreWrapper {
+        type Key = i32;
+        type Value = i32;
+
+        type KeyRefIterator<'k> = vec::IntoIter<&'k i32>
+            where
+                <MockStoreWrapper as super::Store>::Key: 'k,
+                Self: 'k;
+
+        type FlushResultIterator = vec::IntoIter<CacheBrownsResult<Option<Self::Key>>>;
+
+        fn get<Q: Borrow<Self::Key>>(&self, key: &Q) -> Option<Cow<Self::Value>> {
+            self.inner.get(key.borrow())
+        }
+
+        fn peek<Q: Borrow<Self::Key>>(&self, key: &Q) -> Option<Cow<Self::Value>> {
+            self.inner.peek(key.borrow())
+        }
+
+        fn put(&mut self, key: Self::Key, value: Self::Value) {
+            self.inner.put(key, value)
+        }
+
+        fn delete<Q: Borrow<Self::Key>>(
+            &mut self,
+            key: &Q,
+        ) -> CacheBrownsResult<Option<Self::Key>> {
+            self.inner.delete(key.borrow())
+        }
+
+        fn flush(&mut self) -> Self::FlushResultIterator {
+            self.inner.flush()
+        }
+
+        fn keys(&self) -> Self::KeyRefIterator<'_> {
+            self.inner.keys()
+        }
+
+        fn contains<Q: Borrow<Self::Key>>(&self, key: &Q) -> bool {
+            self.inner.contains(key.borrow())
+        }
+    }
 }

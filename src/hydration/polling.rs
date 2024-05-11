@@ -1,6 +1,7 @@
 use crate::CacheBrownsResult;
 use interruptible_polling::SelfUpdatingPollingTask;
 use itertools::Itertools;
+use std::borrow::Borrow;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
@@ -13,8 +14,6 @@ use super::{CacheLookupSuccess, Hydrator, StoreResult};
 /// does, by immediately fetching the missing data from the [`SourceOfRecord`], but it refreshes
 /// data by polling the [`SourceOfRecord`] for updates rather than as needed when stale data is
 /// encountered.
-///
-///
 ///
 /// Note, this hydrator does not attempt to prevent parallel or redundant calls to the [`SourceOfRecord`].
 /// If your data source can be overwhelmed, or you need to avoid wasting cycles this way, the
@@ -116,55 +115,6 @@ where
             }
         }
     }
-
-    // fn poll(shared_inner_state: &Arc<InnerState<S, Sor>>, checker: &dyn Fn() -> bool) {
-    //     let keys_with_hints: Vec<S::Key> = shared_inner_state
-    //         .store
-    //         .read()
-    //         .unwrap()
-    //         .keys()
-    //         .cloned()
-    //         .collect_vec();
-    //     let keys_with_hints = keys_with_hints.into_iter()
-    //         .filter_map(|k| {
-    //             shared_inner_state
-    //                 .store
-    //                 .read()
-    //                 .unwrap()
-    //                 .peek(&k)
-    //                 .map_or(None, |v| Some((k, v)))
-    //         });
-    //
-    //     for batch in shared_inner_state
-    //         .data_source
-    //         .batch_retrieve_with_hint(keys_with_hints)
-    //     {
-    //         if !checker() {
-    //             return;
-    //         }
-    //
-    //         for (k, v) in batch
-    //             // We're already working with copies, so it's fine to just drop any returned hint inputs
-    //             .filter_map(|(k, v)| {
-    //                 match v {
-    //                     Some(v) => Some((k, v)),
-    //                     None => None
-    //                 }
-    //             })
-    //         {
-    //             if !checker() {
-    //                 return;
-    //             }
-    //
-    //             let mut store_handle = shared_inner_state.store.write().unwrap();
-    //
-    //             // Respect any delete that occurred while retrieving
-    //             if store_handle.contains(&k) {
-    //                 store_handle.put(k, v);
-    //             }
-    //         }
-    //     }
-    // }
 }
 
 impl<Key, Value, S, Sor> Hydrator for PollingHydrationStrategy<S, Sor>
@@ -178,7 +128,7 @@ where
     type Value = Value;
     type FlushResultIterator = S::FlushResultIterator;
 
-    fn get(&mut self, key: &Key) -> Option<CacheLookupSuccess<Value>> {
+    fn get<Q: Borrow<Self::Key>>(&mut self, key: &Q) -> Option<CacheLookupSuccess<Value>> {
         let read_lock = self.shared_inner_state.store.read().unwrap();
         let value = read_lock.get(key);
 
@@ -188,17 +138,21 @@ where
                 self.shared_inner_state
                     .data_source
                     .retrieve(key)
-                    .map(|value| {
+                    .map(|value: Self::Value| {
                         self.shared_inner_state
                             .store
                             .write()
                             .unwrap()
-                            .put(key.clone(), value.clone());
-                        CacheLookupSuccess::new(StoreResult::NotFound, true, value.to_owned())
+                            .put(key.borrow().clone(), value.clone());
+                        CacheLookupSuccess::new(StoreResult::NotFound, true, value)
                     })
             }
             Some(value) => Some(CacheLookupSuccess::new(
-                if self.shared_inner_state.data_source.is_valid(key, &value) {
+                if self
+                    .shared_inner_state
+                    .data_source
+                    .is_valid(key.borrow(), &value)
+                {
                     StoreResult::Valid
                 } else {
                     StoreResult::Invalid
@@ -222,247 +176,4 @@ where
 }
 
 #[cfg(test)]
-mod tests {
-    // use std::hash::Hash;
-    // use std::sync::atomic::{AtomicU64, Ordering};
-    // use std::{collections::HashMap, sync::Mutex, thread};
-    //
-    // use crate::store::memory::MemoryStore;
-    //
-    // use super::*;
-    // use uuid::Uuid;
-    //
-    // struct BasicSource<K, V> {
-    //     inner: HashMap<K, V>,
-    // }
-    //
-    // impl<K, V> BasicSource<K, V>
-    // where
-    //     K: Eq + PartialEq + Hash,
-    //     V: Eq,
-    // {
-    //     fn new() -> Self {
-    //         Self {
-    //             inner: HashMap::new(),
-    //         }
-    //     }
-    //
-    //     fn insert(&mut self, key: K, value: V) {
-    //         self.inner.insert(key, value);
-    //     }
-    // }
-    //
-    // impl<K, V> SourceOfRecord for BasicSource<K, V>
-    // where
-    //     K: Eq + PartialEq + Hash,
-    //     V: Clone + Eq,
-    // {
-    //     type Key = K;
-    //     type Value = V;
-    //
-    //     fn retrieve(&self, key: &K) -> Option<V> {
-    //         self.inner.get(key).cloned()
-    //     }
-    //
-    //     fn retrieve_with_hint(&self, key: &K, _current: &V) -> Option<V> {
-    //         self.inner.get(key).cloned()
-    //     }
-    //
-    //     fn is_valid(&self, key: &K, value: &V) -> bool {
-    //         self.retrieve(key) == Some(value.clone())
-    //     }
-    // }
-    //
-    // struct ForgetfulSource {
-    //     inner: HashMap<Uuid, Mutex<Option<u64>>>,
-    // }
-    //
-    // impl ForgetfulSource {
-    //     fn new() -> Self {
-    //         Self {
-    //             inner: HashMap::new(),
-    //         }
-    //     }
-    //
-    //     fn insert(&mut self, key: Uuid, value: u64) {
-    //         self.inner.insert(key, Mutex::new(Some(value)));
-    //     }
-    // }
-    //
-    // impl SourceOfRecord for ForgetfulSource {
-    //     type Key = Uuid;
-    //     type Value = u64;
-    //
-    //     fn retrieve(&self, key: &Uuid) -> Option<u64> {
-    //         // Immediately remove the value once we retrieve it once.
-    //         // We need a Mutex for this because this takes &self.
-    //         self.inner.get(key).and_then(|x| {
-    //             let mut v = x.lock().unwrap();
-    //             let previous = *v;
-    //             *v = None;
-    //             previous
-    //         })
-    //     }
-    //
-    //     fn retrieve_with_hint(&self, key: &Uuid, _value: &u64) -> Option<u64> {
-    //         self.retrieve(key)
-    //     }
-    //
-    //     fn is_valid(&self, key: &Uuid, value: &u64) -> bool {
-    //         self.inner
-    //             .get(key)
-    //             .map_or(false, |v| *v.lock().unwrap() == Some(*value))
-    //     }
-    // }
-    //
-    // struct IncrementingSource {
-    //     value: AtomicU64,
-    // }
-    //
-    // impl IncrementingSource {
-    //     fn new() -> Self {
-    //         Self {
-    //             value: AtomicU64::new(0),
-    //         }
-    //     }
-    // }
-    //
-    // impl SourceOfRecord for IncrementingSource {
-    //     type Key = String;
-    //     type Value = u64;
-    //
-    //     fn retrieve(&self, _key: &String) -> Option<u64> {
-    //         Some(self.value.fetch_add(1, Ordering::Relaxed))
-    //     }
-    //
-    //     fn retrieve_with_hint(&self, key: &String, _v: &u64) -> Option<u64> {
-    //         self.retrieve(key)
-    //     }
-    //
-    //     fn is_valid(&self, _key: &String, _value: &u64) -> bool {
-    //         false
-    //     }
-    // }
-    //
-    // #[test]
-    // fn get_not_found_immediate_pull() {}
-    //
-    // #[test]
-    // fn get_only_updates_after_poll_operation() {}
-    //
-    // #[test]
-    // fn derp() {}
-    //
-    // #[test]
-    // fn flush_propagates() {}
-    //
-    // #[test]
-    // fn stop_tracking_propagates() {}
-    //
-    // #[test]
-    // fn poll_hydration_valid_key() {
-    //     let mut source = BasicSource::new();
-    //     let key_1 = Uuid::new_v4();
-    //     let key_2 = Uuid::new_v4();
-    //     source.insert(key_1, String::from("AAAA"));
-    //     source.insert(key_2, String::from("AAAAAAAA"));
-    //
-    //     let mut cache =
-    //         PollingHydrationStrategy::new(source, MemoryStore::new(), Duration::from_secs(1));
-    //
-    //     assert_eq!(
-    //         cache.get(&key_1),
-    //         Some(CacheLookupSuccess::Miss(String::from("AAAA")))
-    //     );
-    //
-    //     assert_eq!(
-    //         cache.get(&key_1),
-    //         Some(CacheLookupSuccess::Hit(String::from("AAAA")))
-    //     );
-    // }
-    //
-    // #[test]
-    // fn poll_hydration_no_key() {
-    //     let mut source = BasicSource::new();
-    //     let key_1 = Uuid::new_v4();
-    //     let key_2 = Uuid::new_v4();
-    //     let key_3 = Uuid::new_v4();
-    //     source.insert(key_1, String::from("AAAA"));
-    //     source.insert(key_2, String::from("AAAAAAAA"));
-    //
-    //     let mut cache =
-    //         PollingHydrationStrategy::new(source, MemoryStore::new(), Duration::from_secs(1));
-    //
-    //     assert_eq!(cache.get(&key_3), None);
-    //     assert_eq!(cache.get(&key_3), None);
-    // }
-    //
-    // #[test]
-    // fn poll_hydration_lost_key() {
-    //     let mut source = ForgetfulSource::new();
-    //     let key_1 = Uuid::new_v4();
-    //     let key_2 = Uuid::new_v4();
-    //     source.insert(key_1, 0);
-    //     source.insert(key_2, 1);
-    //
-    //     let mut cache =
-    //         PollingHydrationStrategy::new(source, MemoryStore::new(), Duration::from_secs(1));
-    //
-    //     assert_eq!(cache.get(&key_1), Some(CacheLookupSuccess::Miss(0)));
-    //
-    //     assert_eq!(cache.get(&key_1), Some(CacheLookupSuccess::Stale(0)));
-    // }
-    //
-    // #[test]
-    // fn poll_hydration_update_after_poll() {
-    //     let source = IncrementingSource::new();
-    //     let mut cache =
-    //         PollingHydrationStrategy::new(source, MemoryStore::new(), Duration::from_secs(2));
-    //     let key = String::from("asdf");
-    //
-    //     // First lookup is a miss
-    //     assert_eq!(cache.get(&key), Some(CacheLookupSuccess::Miss(0)),);
-    //
-    //     // Align ourselves to be neatly between polls
-    //     thread::sleep(Duration::from_secs(1));
-    //
-    //     // Value now updated to 1
-    //     assert_eq!(cache.get(&key), Some(CacheLookupSuccess::Stale(1)));
-    //
-    //     assert_eq!(cache.get(&key), Some(CacheLookupSuccess::Stale(1)),);
-    //
-    //     thread::sleep(Duration::from_secs(2));
-    //
-    //     // Value now updated to 2
-    //     assert_eq!(cache.get(&key), Some(CacheLookupSuccess::Stale(2)),);
-    // }
-    //
-    // #[test]
-    // fn poll_hydration_stop_tracking_miss() {
-    //     let mut source = BasicSource::new();
-    //     let key_1 = Uuid::new_v4();
-    //     let key_2 = Uuid::new_v4();
-    //     source.insert(key_1, String::from("AAAA"));
-    //     source.insert(key_2, String::from("AAAAAAAA"));
-    //
-    //     let mut cache =
-    //         PollingHydrationStrategy::new(source, MemoryStore::new(), Duration::from_secs(1));
-    //
-    //     assert_eq!(
-    //         cache.get(&key_1),
-    //         Some(CacheLookupSuccess::Miss(String::from("AAAA")))
-    //     );
-    //
-    //     assert_eq!(
-    //         cache.get(&key_1),
-    //         Some(CacheLookupSuccess::Hit(String::from("AAAA")))
-    //     );
-    //
-    //     cache.stop_tracking(&key_1).unwrap();
-    //
-    //     assert_eq!(
-    //         cache.get(&key_1),
-    //         Some(CacheLookupSuccess::Miss(String::from("AAAA")))
-    //     );
-    // }
-}
+mod tests {}

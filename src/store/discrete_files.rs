@@ -1,9 +1,10 @@
 use std::borrow::{Borrow, Cow};
 use std::collections::hash_map::Drain;
 use std::collections::{hash_map, HashMap};
+use std::fmt::Debug;
 use std::fs::File;
 use std::hash::Hash;
-use std::io::{BufReader, BufWriter, Error};
+use std::io::{BufReader, BufWriter, Error, ErrorKind};
 use std::path::{Path, PathBuf};
 use std::{fs, vec};
 
@@ -32,7 +33,7 @@ use crate::CacheBrownsResult;
 /// downgrading or upgrading the executable.
 pub struct DiscreteFileStoreNonVolatile<Key, Value, Serde>
 where
-    Key: Clone + Eq + Hash + Serialize + for<'a> Deserialize<'a>,
+    Key: Clone + Eq + Hash + Serialize + for<'a> Deserialize<'a> + Debug,
     Value: Serialize + for<'a> Deserialize<'a>,
     Serde: DiscreteFileSerializerDeserializer<Value>,
 {
@@ -44,13 +45,15 @@ where
 
 impl<Key, Value, Serde> DiscreteFileStoreNonVolatile<Key, Record<Key, Value>, Serde>
 where
-    Key: Clone + Eq + Hash + Serialize + for<'a> Deserialize<'a>,
+    Key: Clone + Eq + Hash + Serialize + for<'a> Deserialize<'a> + Debug,
     Value: Clone + Serialize + for<'a> Deserialize<'a>,
     Serde: DiscreteFileSerializerDeserializer<Record<Key, Value>>,
 {
-    pub fn new(cache_directory: PathBuf) -> Result<(Self, impl Iterator<Item = PathBuf>), Error> {
+    pub fn new<P: Into<PathBuf>>(
+        cache_directory: P,
+    ) -> Result<(Self, impl Iterator<Item = PathBuf>), Error> {
         let mut store = Self {
-            cache_directory,
+            cache_directory: cache_directory.into(),
             index: HashMap::new(),
             phantom_serde: Default::default(),
             phantom_value: Default::default(),
@@ -71,7 +74,12 @@ where
                 let path = dir_entry.path();
 
                 if let Some(record) = get::<Serde, Record<Key, Value>>(&path) {
-                    store.index.insert(record.key, path);
+                    if store.index.insert(record.key.clone(), path).is_some() {
+                        return Err(Error::new(
+                            ErrorKind::InvalidData,
+                            format!("Duplicate key {:?}", record.key),
+                        ));
+                    }
                 } else {
                     failures.push(path);
                 }
@@ -84,7 +92,7 @@ where
 
 impl<Key, Value, Serde> Store for DiscreteFileStoreNonVolatile<Key, Record<Key, Value>, Serde>
 where
-    Key: Clone + Eq + Hash + Serialize + for<'a> Deserialize<'a>,
+    Key: Clone + Eq + Hash + Serialize + for<'a> Deserialize<'a> + Debug,
     Value: Clone + Serialize + for<'a> Deserialize<'a>,
     Serde: DiscreteFileSerializerDeserializer<Record<Key, Value>>,
 {
@@ -133,8 +141,8 @@ where
 /// post-startup may lead to undefined behavior. The volatile variant attempts to clear the target
 /// directory when it is created, which is a fallible operation.
 ///
-/// [`DiscreteFileStoreVolatile`] will purge files when it is dropped. The purge during construction
-/// is done handle orphaned data from a previous unexpected exit.
+/// [`DiscreteFileStoreVolatile`] will also purge files when it is dropped. The purge during
+/// construction is done handle orphaned data from a previous unexpected exit.
 ///
 /// An index of key to path mappings is held in memory.
 ///
@@ -143,7 +151,7 @@ where
 /// it's safe to purge a cache (it's not the source of truth).
 pub struct DiscreteFileStoreVolatile<Key, Value, Serde>
 where
-    Key: Clone + Eq + Hash + Serialize + for<'a> Deserialize<'a>,
+    Key: Clone + Eq + Hash + Serialize + for<'a> Deserialize<'a> + Debug,
     Value: Serialize + for<'a> Deserialize<'a>,
     Serde: DiscreteFileSerializerDeserializer<Value>,
 {
@@ -155,7 +163,7 @@ where
 
 impl<Key, Value, Serde> DiscreteFileStoreVolatile<Key, Value, Serde>
 where
-    Key: Clone + Eq + Hash + Serialize + for<'a> Deserialize<'a>,
+    Key: Clone + Eq + Hash + Serialize + for<'a> Deserialize<'a> + Debug,
     Value: Serialize + for<'a> Deserialize<'a>,
     Serde: DiscreteFileSerializerDeserializer<Value>,
 {
@@ -163,7 +171,8 @@ where
     /// exists and is empty. If the target exists and has other files, it will attempt to purge them.
     /// If the files cannot be deleted, construction fails to protect the validity of the cache.
     /// If the target directory does not exist, it will be automatically created.
-    pub fn new(cache_directory: PathBuf) -> Result<Self, Error> {
+    pub fn new<P: Into<PathBuf>>(cache_directory: P) -> Result<Self, Error> {
+        let cache_directory = cache_directory.into();
         fs::remove_dir_all(cache_directory.as_path())?;
         fs::create_dir_all(cache_directory.as_path())?;
 
@@ -176,9 +185,21 @@ where
     }
 }
 
+impl<Key, Value, Serde> Drop for DiscreteFileStoreVolatile<Key, Value, Serde>
+where
+    Key: Clone + Eq + Hash + Serialize + for<'a> Deserialize<'a> + Debug,
+    Value: Serialize + for<'a> Deserialize<'a>,
+    Serde: DiscreteFileSerializerDeserializer<Value>,
+{
+    fn drop(&mut self) {
+        // Best-effort. Any errors can be address by the attempt made on next construction.
+        let _ = fs::remove_dir_all(self.cache_directory.as_path());
+    }
+}
+
 impl<Key, Value, Serde> Store for DiscreteFileStoreVolatile<Key, Value, Serde>
 where
-    Key: Clone + Eq + Hash + Serialize + for<'a> Deserialize<'a>,
+    Key: Clone + Eq + Hash + Serialize + for<'a> Deserialize<'a> + Debug,
     Value: Clone + Serialize + for<'a> Deserialize<'a>,
     Serde: DiscreteFileSerializerDeserializer<Value>,
 {
@@ -315,7 +336,7 @@ where
 }
 
 // TODO: dyn Error needs to propagate through maybe? Or at least a logging call back?
-// This process will deterimine the outcome of the old todo off is this too laborious since the
+// This process will determine the outcome of the old todo off is this too laborious since the
 // trait functions are infallible or yes/no
 
 /// Implements serde
@@ -369,3 +390,339 @@ pub type DiscreteFileStoreNonVolatileJson<Key, Value> =
     DiscreteFileStoreNonVolatile<Key, Value, JsonDiscreteFileSerializerDeserializer<Value>>;
 pub type DiscreteFileStoreVolatileJson<Key, Value> =
     DiscreteFileStoreVolatile<Key, Value, JsonDiscreteFileSerializerDeserializer<Value>>;
+
+#[cfg(test)]
+mod tests {
+    use crate::store::discrete_files::{
+        DiscreteFileStoreNonVolatile, DiscreteFileStoreNonVolatileJson,
+        DiscreteFileStoreVolatileJson, JsonDiscreteFileSerializerDeserializer, Record,
+    };
+    use crate::store::Store;
+    use serde::{Deserialize, Serialize};
+    use std::collections::BTreeSet;
+    use std::fs;
+    use std::fs::File;
+    use std::io::{Error, ErrorKind, Write};
+    use std::path::{Path, PathBuf};
+    use tempdir::TempDir;
+
+    const VALID_DATA1_KEY: u32 = 42;
+    const VALID_DATA2_KEY: u32 = 43;
+    const VALID_DATA1: &str = "{\"key\": 42, \"value\": 42}";
+    const VALID_DATA2: &str = "{\"key\": 43, \"value\": 42}";
+
+    fn validate_against_volatile<F: Fn(&mut DiscreteFileStoreVolatileJson<u32, u32>, &TempDir)>(
+        f: F,
+    ) {
+        let (mut store, dir) = empty_volatile_store();
+        f(&mut store, &dir);
+    }
+
+    fn validate_against_volatile2<F: Fn(&mut DiscreteFileStoreVolatileJson<u32, u32>)>(f: F) {
+        let (mut store, dir) = empty_volatile_store();
+        f(&mut store);
+    }
+
+    fn validate_against_non_volatile<
+        F: Fn(&mut DiscreteFileStoreNonVolatileJson<u32, Record<u32, u32>>, &TempDir),
+    >(
+        f: F,
+    ) {
+        let (mut store, dir) = empty_non_volatile_store();
+        f(&mut store, &dir);
+    }
+
+    macro_rules! flush_clears_dir {
+        ($store: ident, $dir: ident) => {
+            $store.put(42, 42);
+            assert!($store.contains(&42));
+
+            $store.flush();
+            assert_eq!(0, fs::read_dir($dir).unwrap().count())
+        };
+    }
+
+    #[test]
+    fn flush_clears_dir() {
+        validate_against_volatile(|store, dir| {
+            flush_clears_dir!(store, dir);
+        });
+        validate_against_non_volatile(|store, dir| {
+            flush_clears_dir!(store, dir);
+        });
+    }
+
+    macro_rules! contains {
+        ($store: ident) => {
+            assert!(!$store.contains(&42));
+
+            $store.put(42, 42);
+            assert!($store.contains(&42));
+
+            $store.put(45, 42);
+            assert!($store.contains(&42));
+
+            $store.put(42, 0);
+            assert!($store.contains(&42));
+
+            $store.delete(&42).unwrap();
+            assert!(!$store.contains(&42));
+        };
+    }
+
+    #[test]
+    fn contains() {
+        validate_against_volatile(|store, _dir| {
+            contains!(store);
+        });
+        validate_against_non_volatile(|store, _dir| {
+            contains!(store);
+        });
+    }
+
+    macro_rules! get_or_peek {
+        ($func: ident, $store: ident) => {
+            assert_eq!(None, $store.get(&42));
+
+            $store.put(42, 42);
+            assert_eq!(42, $store.$func(&42).unwrap().into_owned());
+            assert_eq!(None, $store.$func(&45));
+
+            $store.put(45, 42);
+            assert_eq!(42, $store.$func(&42).unwrap().into_owned());
+            assert_eq!(42, $store.$func(&45).unwrap().into_owned());
+
+            $store.put(42, 55);
+            assert_eq!(55, $store.$func(&42).unwrap().into_owned());
+            assert_eq!(42, $store.$func(&45).unwrap().into_owned());
+        };
+    }
+
+    #[test]
+    fn get() {
+        validate_against_volatile(|store, _dir| {
+            get_or_peek!(get, store);
+        });
+        validate_against_non_volatile(|store, _dir| {
+            get_or_peek!(get, store);
+        });
+    }
+
+    #[test]
+    fn peek() {
+        validate_against_volatile(|store, _dir| {
+            get_or_peek!(peek, store);
+        });
+        validate_against_non_volatile(|store, _dir| {
+            get_or_peek!(peek, store);
+        });
+    }
+
+    macro_rules! keys {
+        ($store: ident) => {
+            assert_eq!(0, $store.keys().count());
+
+            $store.put(42, 42);
+            assert_eq!(1, $store.keys().count());
+
+            $store.put(45, 45);
+            assert_eq!(2, $store.keys().count());
+
+            $store.put(45, 50);
+            let keys: BTreeSet<&u32> = $store.keys().collect();
+            assert!(keys.contains(&42));
+            assert!(keys.contains(&45));
+            assert_eq!(2, keys.len());
+        };
+    }
+
+    #[test]
+    fn keys() {
+        validate_against_volatile(|store, _dir| {
+            keys!(store);
+        });
+        validate_against_non_volatile(|store, _dir| {
+            keys!(store);
+        });
+    }
+
+    macro_rules! delete {
+        ($store: ident) => {
+            $store.put(42, 42);
+            $store.put(45, 42);
+            assert!($store.contains(&42));
+            assert!($store.contains(&45));
+
+            $store.delete(&42).unwrap();
+            assert!(!$store.contains(&42));
+            assert!($store.contains(&45));
+            assert!($store.delete(&42).unwrap().is_none());
+
+            $store.delete(&45).unwrap();
+            assert!(!$store.contains(&42));
+            assert!(!$store.contains(&45));
+        };
+    }
+
+    #[test]
+    fn delete() {
+        validate_against_volatile(|store, dir| {
+            delete!(store);
+        });
+        validate_against_non_volatile(|store, dir| {
+            delete!(store);
+        });
+    }
+
+    #[test]
+    fn volatile_store_clears_pre_existing_data() {
+        let (store, dir) = create_volatile_scenario().unwrap();
+        assert_eq!(0, store.keys().count());
+    }
+
+    #[test]
+    fn volatile_store_clears_clears_data_on_clean_exit() {
+        let (mut store, dir) = create_volatile_scenario().unwrap();
+        store.put(45, 45);
+
+        assert_eq!(1, store.keys().count());
+        assert_eq!(1, std::fs::read_dir(dir.path()).unwrap().count());
+        assert!(std::fs::metadata(dir.path()).unwrap().is_dir());
+
+        drop(store);
+
+        assert!(std::fs::metadata(dir.path()).is_err_and(|e| e.kind() == ErrorKind::NotFound));
+    }
+
+    #[test]
+    fn non_volatile_rehydrates() {
+        let (store, dir) = create_non_volatile_scenario(true).unwrap();
+        assert!(store.0.contains(&VALID_DATA1_KEY));
+        assert_eq!(
+            VALID_DATA1_KEY,
+            store.0.get(&VALID_DATA1_KEY).unwrap().into_owned()
+        );
+        assert!(store.0.contains(&VALID_DATA2_KEY));
+        assert_eq!(42, store.0.get(&VALID_DATA2_KEY).unwrap().into_owned());
+    }
+
+    #[test]
+    fn non_volatile_rehydrate_corrupt_data_dropped() {
+        let (mut store, dir) = create_non_volatile_scenario(false).unwrap();
+        assert!(store.0.contains(&VALID_DATA1_KEY));
+        assert_eq!(
+            VALID_DATA1_KEY,
+            store.0.get(&VALID_DATA1_KEY).unwrap().into_owned()
+        );
+        assert!(!store.0.contains(&VALID_DATA2_KEY));
+    }
+
+    #[test]
+    fn non_volatile_rehydrate_duplicate_key_err() {
+        let dir = create_with_valid_file();
+        create_valid_data_1_in_dir(&dir);
+    }
+
+    #[test]
+    fn non_volatile_rehydrate_from_empty() {
+        let dir = TempDir::new("test").unwrap();
+        let store: DiscreteFileStoreNonVolatile<
+            u32,
+            Record<u32, u32>,
+            JsonDiscreteFileSerializerDeserializer<Record<u32, u32>>,
+        > = DiscreteFileStoreNonVolatileJson::new(dir.path()).unwrap().0;
+        assert_eq!(0, store.keys().count());
+    }
+
+    #[test]
+    fn serialize_deserialize_struct_happy_path() {
+        #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+        struct Bar {
+            foo: i32,
+        }
+        #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+        struct Foo {
+            bar: usize,
+            cow: (Option<bool>, Bar),
+        }
+
+        let foo = Foo {
+            bar: 123456,
+            cow: (Some(false), Bar { foo: -42 }),
+        };
+
+        let dir = TempDir::new("test").unwrap();
+        let mut store = DiscreteFileStoreVolatileJson::new(dir.path()).unwrap();
+        store.put(32, foo.clone());
+
+        assert_eq!(foo, store.get(&32).unwrap().into_owned())
+    }
+
+    fn empty_volatile_store() -> (DiscreteFileStoreVolatileJson<u32, u32>, TempDir) {
+        let dir = TempDir::new("test").unwrap();
+        (DiscreteFileStoreVolatileJson::new(dir.path()).unwrap(), dir)
+    }
+
+    fn empty_non_volatile_store() -> (
+        DiscreteFileStoreNonVolatileJson<u32, Record<u32, u32>>,
+        TempDir,
+    ) {
+        let dir = TempDir::new("test").unwrap();
+        let store = DiscreteFileStoreNonVolatileJson::new(dir.path()).unwrap().0;
+        (store, dir)
+    }
+
+    fn create_volatile_scenario(
+    ) -> Result<(DiscreteFileStoreVolatileJson<u32, u32>, TempDir), Error> {
+        create_files(|path| DiscreteFileStoreVolatileJson::new(path), true)
+    }
+
+    fn create_non_volatile_scenario(
+        with_only_valid_data: bool,
+    ) -> Result<
+        (
+            (
+                DiscreteFileStoreNonVolatile<
+                    u32,
+                    Record<u32, u32>,
+                    JsonDiscreteFileSerializerDeserializer<Record<u32, u32>>,
+                >,
+                impl Iterator<Item = PathBuf>,
+            ),
+            TempDir,
+        ),
+        Error,
+    > {
+        create_files(
+            |path| DiscreteFileStoreNonVolatileJson::new(path),
+            with_only_valid_data,
+        )
+    }
+
+    fn create_valid_data_1_in_dir(dir: &TempDir) {
+        let mut file1 = File::create(dir.path().join("a")).unwrap();
+        file1.write_all(VALID_DATA1.as_bytes()).unwrap();
+    }
+
+    fn create_with_valid_file() -> TempDir {
+        let dir = TempDir::new("test").unwrap();
+        create_valid_data_1_in_dir(&dir);
+        dir
+    }
+
+    fn create_files<F: Fn(PathBuf) -> Result<S, Error>, S>(
+        factory: F,
+        with_only_valid_data: bool,
+    ) -> Result<(S, TempDir), Error> {
+        let dir = create_with_valid_file();
+        let mut file2 = File::create(dir.path().join("b")).unwrap();
+
+        if with_only_valid_data {
+            file2.write_all(VALID_DATA2.as_bytes()).unwrap();
+        } else {
+            file2.write_all("ajsd;f".as_bytes()).unwrap();
+        }
+
+        Ok((factory(dir.path().to_path_buf())?, dir))
+    }
+}

@@ -18,15 +18,16 @@ pub enum InvalidCacheEntryBehavior {
 
 pub struct ManagedCache<Key, Value, H>
 where
+    Value: Clone,
     H: Hydrator<Key = Key, Value = Value>,
 {
     hydrator: H,
     when_invalid: InvalidCacheEntryBehavior,
 }
 
-impl<Key, Value, H> ManagedCache<Key, Value, H>
+impl<'a, Key, Value, H> ManagedCache<Key, Value, H>
 where
-    Value: From<CacheLookupSuccess<Value>>,
+    Value: From<CacheLookupSuccess<Value>> + Clone + 'a,
     H: Hydrator<Key = Key, Value = Value>,
 {
     pub fn new(hydrator: H, when_invalid: InvalidCacheEntryBehavior) -> Self {

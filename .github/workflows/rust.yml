@@ -27,6 +27,8 @@ jobs:
       - name: Docs
         run: RUSTDOCFLAGS="-D warnings" cargo doc --no-deps
       # This crate manually manages memory in some cases, so run valgrind
+      - name: Install valgrind
+        run: sudo apt-get update && sudo apt-get install valgrind
       - name: Install cargo-valgrind
         run: cargo install cargo-valgrind
       - name: Detect Memory Leaks

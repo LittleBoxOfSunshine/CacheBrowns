@@ -1,18 +1,17 @@
 use crate::CacheBrownsResult;
+use std::borrow::Borrow;
 
 pub mod polling;
 pub mod pull;
 
-// TODO: It occurs that why this feels not useful it's just "a cache". Maybe rename, maybe a sign the other traits should inherent from it, maybe it should just be an alias?
-// actually, get is slightly different, so it's flush / stop that feel like another trait is lurking
-// could also just be that flush should be pulled out?
 pub trait Hydrator {
     type Key;
-    type Value;
+    type Value: Clone;
 
     type FlushResultIterator: Iterator<Item = CacheBrownsResult<Option<Self::Key>>>;
 
-    fn get(&mut self, key: &Self::Key) -> Option<CacheLookupSuccess<Self::Value>>;
+    // TODO: What would it take for this to be Cow?
+    fn get<Q: Borrow<Self::Key>>(&mut self, key: &Q) -> Option<CacheLookupSuccess<Self::Value>>;
 
     fn flush(&mut self) -> Self::FlushResultIterator;
 
@@ -20,7 +19,7 @@ pub trait Hydrator {
 }
 
 #[derive(Debug, Eq, PartialEq)]
-pub enum CacheLookupSuccess<Value> {
+pub enum CacheLookupSuccess<Value: Clone> {
     /// Value was not present in the underlying store and had to be fetched from source of record.
     Miss(Value),
 
@@ -34,7 +33,7 @@ pub enum CacheLookupSuccess<Value> {
     Hit(Value),
 }
 
-impl<Value> CacheLookupSuccess<Value> {
+impl<Value: Clone> CacheLookupSuccess<Value> {
     pub fn new(store_result: StoreResult, hydrated: bool, value: Value) -> Self {
         match store_result {
             StoreResult::Invalid => {

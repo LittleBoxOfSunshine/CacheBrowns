@@ -73,22 +73,56 @@ pub trait SourceOfRecord {
     fn is_valid(&self, key: &Self::Key, value: &Self::Value) -> bool;
 }
 
-/// Implements an HTTP [`SourceOfRecord`] that respects cache control headers.
-pub struct HttpDataSourceOfRecord {}
+#[cfg(test)]
+pub mod test_helpers {
+    use super::*;
+    use mockall::automock;
 
-// TODO: Implement the HTTP standard, decide how best to abstract this out independent of a particular client library
-// impl HttpDataSourceOfRecord {}
-//
-// impl<Key, Value> SourceOfRecord<Key, Value> for HttpDataSourceOfRecord {
-//     fn retrieve(&self, _key: &Key) -> Option<Value> {
-//         todo!()
-//     }
-//
-//     fn retrieve_with_hint(&self, _key: &Key, _current_value: &Value) -> Option<Value> {
-//         todo!()
-//     }
-//
-//     fn is_valid(&self, _key: &Key, _value: &Value) -> bool {
-//         todo!()
-//     }
-// }
+    pub struct Sor {}
+
+    #[automock]
+    impl Sor {
+        pub fn retrieve(&self, _key: &i32) -> Option<i32> {
+            unimplemented!()
+        }
+
+        pub fn retrieve_with_hint(&self, _key: &i32, _current_value: &i32) -> Option<i32> {
+            unimplemented!()
+        }
+
+        pub fn is_valid(&self, _key: &i32, _value: &i32) -> bool {
+            unimplemented!()
+        }
+    }
+
+    pub struct MockSorWrapper {
+        inner: MockSor,
+    }
+
+    impl MockSorWrapper {
+        pub fn new(inner: MockSor) -> Self {
+            Self { inner }
+        }
+    }
+
+    impl SourceOfRecord for MockSorWrapper {
+        type Key = i32;
+        type Value = i32;
+
+        fn retrieve<Q: Borrow<Self::Key>>(&self, key: &Q) -> Option<Self::Value> {
+            self.inner.retrieve(key.borrow())
+        }
+
+        fn retrieve_with_hint<Q: Borrow<Self::Key>, V: Borrow<Self::Value>>(
+            &self,
+            key: &Q,
+            value: &V,
+        ) -> Option<Self::Value> {
+            self.inner.retrieve_with_hint(key.borrow(), value.borrow())
+        }
+
+        fn is_valid(&self, key: &Self::Key, value: &Self::Value) -> bool {
+            self.inner.is_valid(key, value)
+        }
+    }
+}
