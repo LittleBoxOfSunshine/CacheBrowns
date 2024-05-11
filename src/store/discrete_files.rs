@@ -672,6 +672,7 @@ mod tests {
         create_files(DiscreteFileStoreVolatileJson::new, true)
     }
 
+    #[allow(clippy::type_complexity)]
     fn create_non_volatile_scenario(
         with_only_valid_data: bool,
     ) -> Result<
