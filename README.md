@@ -13,11 +13,13 @@ The second priority is flexibility. For maximum interoperability of components, 
 correctness is not a part of `Trait` contracts and certain optimizations (such as return by reference) are not mandatory
 for implementors. 
 
-Finally, speed is still important. References or [Cow](https://doc.rust-lang.org/std/borrow/enum.Cow.html) are used
-whenever possible (meaning when doing so doesn't preclude by value usage) to avoid unnecessary copies and
+Finally, speed is still important. References or [Cow](https://doc.rust-lang.org/std/borrow/enum.Cow.html) are used 
+whenever possible (meaning when doing so doesn't preclude by value usage) to avoid unnecessary copies and to allow for
+trait implementations that hold no in memory state to return references to.
 
 Spiritually the concepts leveraged here are similar to "one-way data flow" and managed memory. It was inspired by a need
-to address cache invalidation bugs at scale in the eventually-consistent, distributed systems powering Azure IMDS and Azure Boost.
+to address cache invalidation bugs at scale for the millions of nodes in the eventually-consistent, distributed systems
+powering Azure IMDS and Azure Boost.
 
 ## Usage
 
@@ -27,7 +29,7 @@ See the [docs.rs page]() for full details. This README focuses on the theory beh
 
 ## Background
 
-This is a condensed discussion. For a more thorough, but still in formal, exploration of these concepts refer to 
+This is a condensed discussion. For a more thorough, but still informal, exploration of these concepts refer to 
 [the project announcement blog post](). For a complete, formal discussion of the theory independent of this 
 implementation see ["the whitepaper"]().
 
@@ -48,11 +50,9 @@ implementation see ["the whitepaper"]().
 
 ###  
 
-For the sake of this discussion we'll classify caches as either `custom` and `shared`. Shared implementations would
+For the sake of this discussion we'll think of caches as either `custom` and `shared`. Shared implementations would
 be examples like caching built into a client such as for HTTP or a database. Custom caches exist because there is no
 shared implementation for the application, or as a layer of customization on top of a shared implementation.
-
-They tend to be of differe
 
 ## Problem Statement
 

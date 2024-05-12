@@ -7,6 +7,15 @@ pub mod replacement;
 mod tiered;
 
 // TODO: Demonstrate integration with fast external store like: https://crates.io/crates/scc
+// TODO: Add link for blog post
+// TODO: Evaluate the feel of default vs not default via peek vs poke. More I think about it, more the concern over defaults feels misguided.
+// most store impls will be pure stores after all. If you're doing a composite or replacement, you're plugged in enough to know what's up.
+// Additionally, even making the stores is pretty rare. If you chose to extend the library, how much do I really need to be paranoid about
+// preventing you from goofing up?
+// TODO: because of adding update, that resolved the question of blanket vs default. Update needs to be a default,
+// because it can be as store or as composite. Composite doesn't *need* to be, so this could be pulled out and blanket impl.
+// So, it comes down to is that clearer to have them distinct + does the blanket allow things to be passed normally as if
+// we were still using trait defaults. Still though, it seems goofy to have say polling "require" a composite store.
 
 /// A [`Store`] is the base layer of a [`super::managed_cache::ManagedCache`] that handles the
 /// storage of data. The actual representation of the underlying data is arbitrary, and higher
@@ -27,6 +36,22 @@ mod tiered;
 /// 2. [`Store`] objects can be composed / layered and may have usage tracking (e.g. Replacement algorithms).
 /// 3. Failures can occur. You must ensure that consistency is maintained throughout the stack.
 /// 4. The store may be volatile or best-effort persistent. If you are maintaining associated state (index, count, etc.) on top of the store you must check for pre-existing data at construction time.
+///
+/// Implicitly, there exists the notion of 3 kinds of stores:
+///
+/// 1. `Pure Store` - Isn't managing or consider other stores
+/// 2. `Replacement` - Composes another store to provide data management. Why [`peek`] is needed.
+/// 3. `Composite Store` - Combines multiple pure stores and/or replacements. Why [`poke`] is needed.
+///
+/// There isn't a great way to encode these differences into the type system. The [`peek`] and
+/// [`poke`] functions aren't needed for pure stores. A pure store can always impl [`peek`] as
+/// [`get`] and [`poke`] as a no-op. We want maximum flexibility in composition, so these can't be
+/// pulled out into a distinct trait. See this blog post for a detailed explanation.
+///
+/// The inability to encode the side effects vs no side effects distinction into the type system is
+/// why no default impls exist on the trait. For correctness, it's important to engage with this
+/// concept in every implementation. With a default, you can miss that the question exists more
+/// easily, so we opted to prefer the occasional minor boilerplate instead.
 pub trait Store {
     type Key;
     type Value: Clone;
@@ -36,10 +61,25 @@ pub trait Store {
         Self::Key: 'k,
         Self: 'k;
 
-    type FlushResultIterator: Iterator<Item = CacheBrownsResult<Option<Self::Key>>>;
+    type FlushResultIterator: Iterator<Item = CacheBrownsResult<Self::Key>>;
 
-    /// Get a copy of the value associated with the key, if it exists.
+    /// Get a copy of the value associated with the key, if it exists. This function must induce any
+    /// side effects that are appropriate for the semantics of the implementation. For example, if
+    /// the store is an LRU, calls to [`get`] must induce the side effect of updating the usage
+    /// order.
+    /// // TODO: actually do the default and remove boilerplate from other stores
+    /// Defaults to calling [`peek`]. Pure stores have no side effects to apply.
     fn get<Q: Borrow<Self::Key>>(&self, key: &Q) -> Option<Cow<Self::Value>>;
+
+    /// Complement of [`get`]. A [`poke`] will cause the side effects of a read to occur without
+    /// actually reading the data. Fetching unneeded data is wasteful in general, but in some cases
+    /// the arbitrary underlying store may be expensive to fetch data from (e.g. if it requires
+    /// deserialization). In these cases, the compiler also can't necessarily optimize this out for
+    /// you as it may be unclear of other side effects exist. Thus, the implementor needs to
+    /// communicate this themselves. Also makes the intent of the caller clear.
+    ///
+    /// Defaults to no-op. A pure store has no side effects to apply.
+    fn poke<Q: Borrow<Self::Key>>(&self, _key: &Q) { }
 
     /// A platform read of a value. When replacement strategies are used (e.g. LRU) reads have side
     /// effects that update internal tracking. If hydration requires inspecting the current state,
@@ -63,6 +103,20 @@ pub trait Store {
     /// 2. The [`Store`] should accept a callback that is invoked when failures occur
     /// 3. Use composition to wrap a component with a fallible put concept where the error is recorded then suppressed to satisfy the [`Store`] trait.
     fn put(&mut self, key: Self::Key, value: Self::Value);
+
+    /// Update the key-value pair in the [`Store`], if they key is present. This serves 2 purposes:
+    /// 1. For correctness in composite caches. A [`Hydrator`] views a composite cache as a monolith,
+    ///    so when it refreshes data the composite needs this context to ensure it updates the data
+    ///    only where it is already present, not shifting data between internal stores.
+    /// 2. Allows the store to optimize if the internal implementation of contains can provide a hint for the write operation.
+    ///
+    /// Defaults to calling [`contains`] then [`put`]. Only needs customization implementing a
+    /// Replacement, a Composite Store, or for optimizing a pure store.
+    fn update(&mut self, key: Self::Key, value: Self::Value) {
+        if self.contains(&key) {
+            self.put(key, value)
+        }
+    }
 
     /// Remove a record from the store. We cannot guarantee that a store is infallible, nor can the
     /// store know whether other layers care about failures or how they would respond. Most of the
@@ -133,7 +187,7 @@ pub mod test_helpers {
             unimplemented!()
         }
 
-        pub fn flush(&mut self) -> vec::IntoIter<CacheBrownsResult<Option<i32>>> {
+        pub fn flush(&mut self) -> vec::IntoIter<CacheBrownsResult<i32>> {
             unimplemented!()
         }
 
@@ -165,7 +219,7 @@ pub mod test_helpers {
                 <MockStoreWrapper as super::Store>::Key: 'k,
                 Self: 'k;
 
-        type FlushResultIterator = vec::IntoIter<CacheBrownsResult<Option<Self::Key>>>;
+        type FlushResultIterator = vec::IntoIter<CacheBrownsResult<Self::Key>>;
 
         fn get<Q: Borrow<Self::Key>>(&self, key: &Q) -> Option<Cow<Self::Value>> {
             self.inner.get(key.borrow())

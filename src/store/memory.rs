@@ -29,7 +29,7 @@ impl<Key: Eq + std::hash::Hash, Value: Clone> Store for MemoryStore<Key, Value> 
     type Key = Key;
     type Value = Value;
     type KeyRefIterator<'k> = hash_map::Keys<'k, Key, Value> where Key: 'k, Value: 'k;
-    type FlushResultIterator = vec::IntoIter<CacheBrownsResult<Option<Key>>>;
+    type FlushResultIterator = vec::IntoIter<CacheBrownsResult<Key>>;
 
     fn get<Q: Borrow<Key>>(&self, key: &Q) -> Option<Cow<Value>> {
         self.peek(key)
@@ -50,7 +50,7 @@ impl<Key: Eq + std::hash::Hash, Value: Clone> Store for MemoryStore<Key, Value> 
     fn flush(&mut self) -> Self::FlushResultIterator {
         self.data
             .drain()
-            .map(|(k, _v)| Ok(Some(k)))
+            .map(|(k, _v)| Ok(k))
             .collect_vec()
             .into_iter()
     }

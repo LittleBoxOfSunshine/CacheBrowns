@@ -8,7 +8,7 @@ pub trait Hydrator {
     type Key;
     type Value: Clone;
 
-    type FlushResultIterator: Iterator<Item = CacheBrownsResult<Option<Self::Key>>>;
+    type FlushResultIterator: Iterator<Item = CacheBrownsResult<Self::Key>>;
 
     // TODO: What would it take for this to be Cow?
     fn get<Q: Borrow<Self::Key>>(&mut self, key: &Q) -> Option<CacheLookupSuccess<Self::Value>>;

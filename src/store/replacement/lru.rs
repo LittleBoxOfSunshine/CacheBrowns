@@ -267,8 +267,16 @@ where
         value
     }
 
+    fn poke<Q: Borrow<Self::Key>>(&self, key: &Q) {
+        self.store.poke(key);
+    }
+
     fn peek<Q: Borrow<Self::Key>>(&self, key: &Q) -> Option<Cow<Self::Value>> {
         self.store.peek(key)
+    }
+
+    fn update(&mut self, key: Self::Key, value: Self::Value) {
+        self.store.update(key, value)
     }
 
     fn put(&mut self, key: Self::Key, value: Self::Value) {
@@ -494,7 +502,7 @@ mod tests {
         store.put(1, 1);
         store.put(2, 1);
 
-        let deleted_keys: BTreeSet<u32> = store.flush().map(|x| x.unwrap().unwrap()).collect();
+        let deleted_keys: BTreeSet<u32> = store.flush().map(|x| x.unwrap()).collect();
         assert_equal(BTreeSet::from_iter(vec![0, 1, 2]), deleted_keys);
         assert_eq!(0, store.index.borrow().len());
         assert_eq!(0, store.store.keys().len());
@@ -642,7 +650,7 @@ mod tests {
         type KeyRefIterator<'k> = vec::IntoIter<&'k u32> where
             Self::Key: 'k,
             Self: 'k;
-        type FlushResultIterator = vec::IntoIter<CacheBrownsResult<Option<u32>>>;
+        type FlushResultIterator = vec::IntoIter<CacheBrownsResult<u32>>;
 
         fn get<Q: Borrow<Self::Key>>(&self, _key: &Q) -> Option<Cow<Self::Value>> {
             unimplemented!()

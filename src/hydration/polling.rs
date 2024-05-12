@@ -108,9 +108,7 @@ where
                     let mut store_handle = shared_inner_state.store.write().unwrap();
 
                     // Respect delete if delete occurred during retrieval
-                    if store_handle.contains(&key) {
-                        store_handle.put(key, v.clone());
-                    }
+                    store_handle.update(key, v.clone());
                 }
             }
         }

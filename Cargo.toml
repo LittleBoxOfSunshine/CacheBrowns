@@ -5,7 +5,7 @@ version = "0.0.1"
 edition = "2021"
 authors = ["Chris Henk <chris.henk@unobtainium.software>"]
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/Azure/CacheBrowns"
+repository = "https://github.com/LittleBoxOfSunshine/CacheBrowns"
 readme = "README.md"
 keywords = ["cache"]
 

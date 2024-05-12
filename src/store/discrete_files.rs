@@ -99,7 +99,7 @@ where
     type Key = Key;
     type Value = Value;
     type KeyRefIterator<'k> = hash_map::Keys<'k, Key, PathBuf> where Key: 'k, Value: 'k, Serde: 'k;
-    type FlushResultIterator = vec::IntoIter<CacheBrownsResult<Option<Key>>>;
+    type FlushResultIterator = vec::IntoIter<CacheBrownsResult<Key>>;
 
     fn get<Q: Borrow<Key>>(&self, key: &Q) -> Option<Cow<Value>> {
         self.peek(key)
@@ -206,7 +206,7 @@ where
     type Key = Key;
     type Value = Value;
     type KeyRefIterator<'k> = hash_map::Keys<'k, Key, PathBuf> where Key: 'k, Value: 'k, Serde: 'k;
-    type FlushResultIterator = vec::IntoIter<CacheBrownsResult<Option<Key>>>;
+    type FlushResultIterator = vec::IntoIter<CacheBrownsResult<Key>>;
 
     fn get<Q: Borrow<Key>>(&self, key: &Q) -> Option<Cow<Value>> {
         self.peek(key)
@@ -281,10 +281,10 @@ where
 }
 
 // Shared implementation of flush
-fn flush<Key>(records: Drain<'_, Key, PathBuf>) -> vec::IntoIter<CacheBrownsResult<Option<Key>>> {
+fn flush<Key>(records: Drain<'_, Key, PathBuf>) -> vec::IntoIter<CacheBrownsResult<Key>> {
     records
         .into_iter()
-        .map(|(k, path)| fs::remove_file(path).map(|_| Some(k)).map_err(|e| e.into()))
+        .map(|(k, path)| fs::remove_file(path).map(|_| k).map_err(|e| e.into()))
         .collect_vec()
         .into_iter()
 }
