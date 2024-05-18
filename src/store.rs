@@ -47,11 +47,6 @@ mod tiered;
 /// [`poke`] functions aren't needed for pure stores. A pure store can always impl [`peek`] as
 /// [`get`] and [`poke`] as a no-op. We want maximum flexibility in composition, so these can't be
 /// pulled out into a distinct trait. See this blog post for a detailed explanation.
-///
-/// The inability to encode the side effects vs no side effects distinction into the type system is
-/// why no default impls exist on the trait. For correctness, it's important to engage with this
-/// concept in every implementation. With a default, you can miss that the question exists more
-/// easily, so we opted to prefer the occasional minor boilerplate instead.
 pub trait Store {
     type Key;
     type Value: Clone;
@@ -67,8 +62,6 @@ pub trait Store {
     /// side effects that are appropriate for the semantics of the implementation. For example, if
     /// the store is an LRU, calls to [`get`] must induce the side effect of updating the usage
     /// order.
-    /// // TODO: actually do the default and remove boilerplate from other stores
-    /// Defaults to calling [`peek`]. Pure stores have no side effects to apply.
     fn get<Q: Borrow<Self::Key>>(&self, key: &Q) -> Option<Cow<Self::Value>>;
 
     /// Complement of [`get`]. A [`poke`] will cause the side effects of a read to occur without
@@ -77,9 +70,7 @@ pub trait Store {
     /// deserialization). In these cases, the compiler also can't necessarily optimize this out for
     /// you as it may be unclear of other side effects exist. Thus, the implementor needs to
     /// communicate this themselves. Also makes the intent of the caller clear.
-    ///
-    /// Defaults to no-op. A pure store has no side effects to apply.
-    fn poke<Q: Borrow<Self::Key>>(&self, _key: &Q) { }
+    fn poke<Q: Borrow<Self::Key>>(&self, _key: &Q);
 
     /// A platform read of a value. When replacement strategies are used (e.g. LRU) reads have side
     /// effects that update internal tracking. If hydration requires inspecting the current state,
@@ -109,14 +100,7 @@ pub trait Store {
     ///    so when it refreshes data the composite needs this context to ensure it updates the data
     ///    only where it is already present, not shifting data between internal stores.
     /// 2. Allows the store to optimize if the internal implementation of contains can provide a hint for the write operation.
-    ///
-    /// Defaults to calling [`contains`] then [`put`]. Only needs customization implementing a
-    /// Replacement, a Composite Store, or for optimizing a pure store.
-    fn update(&mut self, key: Self::Key, value: Self::Value) {
-        if self.contains(&key) {
-            self.put(key, value)
-        }
-    }
+    fn update(&mut self, key: Self::Key, value: Self::Value);
 
     /// Remove a record from the store. We cannot guarantee that a store is infallible, nor can the
     /// store know whether other layers care about failures or how they would respond. Most of the
@@ -143,9 +127,17 @@ pub trait Store {
     /// reads to ensure that correctness is maintained. While the data won't be invalid, it will be
     /// unclear to the user it's still present and can become a memory leak.
     ///
-    /// Does not return `Option<Value>`, because getting the value may be expensive. Callers must
-    /// explicitly request the Value by calling [`Store::get`] first.
+    /// Does not return `Option<Value>`, because getting the value may be expensive. If you want the
+    /// deleted value, use [`take`].
     fn delete<Q: Borrow<Self::Key>>(&mut self, key: &Q) -> CacheBrownsResult<Option<Self::Key>>;
+
+    /// See [`delete`]. Take is [`delete`] that also returns the value. [`get`] can be expensive, but
+    /// when we do need the value even if it may be expensive, a [`take`] implementation may be more
+    /// optimized than a [`get`] followed by [`delete`].
+    fn take<Q: Borrow<Self::Key>>(
+        &mut self,
+        key: &Q,
+    ) -> CacheBrownsResult<Option<(Self::Key, Cow<Self::Value>)>>;
 
     // TODO: Add integration test covering the delete fails leads to no correctness issues to prove the claim in doc comment above.
 
@@ -179,11 +171,23 @@ pub mod test_helpers {
             unimplemented!()
         }
 
+        pub fn poke(&self, _key: &i32) {
+            unimplemented!()
+        }
+
         pub fn put(&mut self, _key: i32, _value: i32) {
             unimplemented!()
         }
 
+        pub fn update(&mut self, _key: i32, _value: i32) {
+            unimplemented!()
+        }
+
         pub fn delete(&mut self, _key: &i32) -> CacheBrownsResult<Option<i32>> {
+            unimplemented!()
+        }
+
+        pub fn take<'a>(&mut self, _key: &i32) -> CacheBrownsResult<Option<(i32, Cow<'a, i32>)>> {
             unimplemented!()
         }
 
@@ -225,6 +229,10 @@ pub mod test_helpers {
             self.inner.get(key.borrow())
         }
 
+        fn poke<Q: Borrow<Self::Key>>(&self, key: &Q) {
+            self.inner.poke(key.borrow());
+        }
+
         fn peek<Q: Borrow<Self::Key>>(&self, key: &Q) -> Option<Cow<Self::Value>> {
             self.inner.peek(key.borrow())
         }
@@ -233,11 +241,19 @@ pub mod test_helpers {
             self.inner.put(key, value)
         }
 
+        fn update(&mut self, key: Self::Key, value: Self::Value) {
+            self.inner.update(key, value)
+        }
+
         fn delete<Q: Borrow<Self::Key>>(
             &mut self,
             key: &Q,
         ) -> CacheBrownsResult<Option<Self::Key>> {
             self.inner.delete(key.borrow())
+        }
+
+        fn take<Q: Borrow<Self::Key>>(&mut self, key: &Q) -> CacheBrownsResult<Option<(Self::Key, Cow<Self::Value>)>> {
+            self.inner.take(key.borrow())
         }
 
         fn flush(&mut self) -> Self::FlushResultIterator {

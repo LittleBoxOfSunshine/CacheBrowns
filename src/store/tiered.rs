@@ -1,7 +1,6 @@
-use std::borrow::{Borrow, Cow};
-use std::marker::PhantomData;
-use crate::CacheBrownsResult;
 use crate::store::Store;
+use crate::CacheBrownsResult;
+use std::borrow::{Borrow, Cow};
 
 /*
 Tiered works with ripple propagation
@@ -33,67 +32,98 @@ pub enum RippleMode {
     ShortCircuit,
 }
 
-// pub trait Tier<S> {
-//     type Store;
-//
-//     fn tier(&self, inner: S) -> Self::Store;
-// }
-
-pub struct TieredStore<Tier, Next>
-// where
-//     Tier: Store,
-//     Next: Store
-{
+pub struct TieredStore<Tier, Next> {
     inner: Tier,
     next: Next,
     ripple_mode: RippleMode,
 }
 
-// impl<Tier> From<Tier> for TieredStore<Identity, Tier> {
-//     fn from(tier: Tier) -> Self {
-//         Self {
-//             tier: Identity::new(),
-//             next: tier,
-//         }
-//     }
-// }
-
-impl<Tier> TieredStore<Identity, Tier>
-    where
-        Tier: Store,
+impl<Tier> TieredStore<(), Tier>
+where
+    Tier: Store,
 {
     pub fn new(ripple_mode: RippleMode, tier: Tier) -> Self {
         Self {
-            inner: Identity::new(),
+            inner: (),
             next: tier,
             ripple_mode,
         }
     }
 
-    pub fn tier<Next>(self, next: Next) -> TieredStore<Identity, TieredStore<Tier, Next>>
+    pub fn tier<Next>(self, next: Next) -> TieredStore<(), TieredStore<Tier, Next>>
     where
-        Next: Store
+        Next: Store,
     {
         TieredStore {
             inner: self.inner,
             next: TieredStore {
                 inner: self.next,
                 next,
-                ripple_mode: self.ripple_mode.clone()
+                ripple_mode: self.ripple_mode.clone(),
             },
-            ripple_mode: self.ripple_mode
+            ripple_mode: self.ripple_mode,
         }
     }
 }
 
-impl<K, V, Tier, Next> Store for TieredStore<Tier, Next>
+impl<Tier> Store for TieredStore<(), Tier>
 where
-    Tier: Store<Key = K, Value = V>,
-    Next: Store<Key = K, Value = V>,
-    V: Clone,
+    Tier: Store,
 {
-    type Key = K;
-    type Value = V;
+    type Key = Tier::Key;
+    type Value = Tier::Value;
+    type KeyRefIterator<'k> = Tier::KeyRefIterator<'k> where <Tier as Store>::Key: 'k, Self: 'k;
+    type FlushResultIterator = Tier::FlushResultIterator;
+
+    fn get<Q: Borrow<Self::Key>>(&self, key: &Q) -> Option<Cow<Self::Value>> {
+        self.next.get(key)
+    }
+
+    fn poke<Q: Borrow<Self::Key>>(&self, key: &Q) {
+        self.next.poke(key)
+    }
+
+    fn peek<Q: Borrow<Self::Key>>(&self, key: &Q) -> Option<Cow<Self::Value>> {
+        self.next.peek(key)
+    }
+
+    fn put(&mut self, key: Self::Key, value: Self::Value) {
+        self.next.put(key, value)
+    }
+
+    fn update(&mut self, key: Self::Key, value: Self::Value) {
+        self.next.update(key, value)
+    }
+
+    fn delete<Q: Borrow<Self::Key>>(&mut self, key: &Q) -> CacheBrownsResult<Option<Self::Key>> {
+        self.next.delete(key)
+    }
+
+    fn take<Q: Borrow<Self::Key>>(&mut self, key: &Q) -> CacheBrownsResult<Option<(Self::Key, Cow<Self::Value>)>> {
+        self.next.take(key)
+    }
+
+    fn flush(&mut self) -> Self::FlushResultIterator {
+        self.next.flush()
+    }
+
+    fn keys(&self) -> Self::KeyRefIterator<'_> {
+        self.next.keys()
+    }
+
+    fn contains<Q: Borrow<Self::Key>>(&self, key: &Q) -> bool {
+        self.next.contains(key)
+    }
+}
+
+impl<K, Tier, Next> Store for TieredStore<Tier, Next>
+where
+    K: Clone,
+    Tier: Store<Key = K, Value = Next::Value>,
+    Next: Store<Key = K>,
+{
+    type Key = Tier::Key;
+    type Value = Tier::Value;
     type KeyRefIterator<'k> = Next::KeyRefIterator<'k> where Self::Key: 'k, Self: 'k;
     type FlushResultIterator = Next::FlushResultIterator;
 
@@ -108,11 +138,15 @@ where
                         self.next.poke(key);
                         Some(value)
                     }
-                    RippleMode::ShortCircuit => Some(value)
+                    RippleMode::ShortCircuit => Some(value),
                 }
             }
-            None => self.next.get(key)
+            None => self.next.get(key),
         }
+    }
+
+    fn poke<Q: Borrow<Self::Key>>(&self, _key: &Q) {
+        todo!()
     }
 
     fn peek<Q: Borrow<Self::Key>>(&self, key: &Q) -> Option<Cow<Self::Value>> {
@@ -120,19 +154,27 @@ where
         // No side effects exist to consider, so no propagation is needed.
         match self.inner.peek(key) {
             None => self.next.peek(key),
-            Some(value) => Some(value)
+            Some(value) => Some(value),
         }
     }
 
     fn put(&mut self, key: Self::Key, value: Self::Value) {
-
+        self.next.put(key.clone(), value.clone());
+        self.inner.put(key, value);
     }
 
     fn update(&mut self, key: Self::Key, value: Self::Value) {
-        self.inner.update(key, value)
+        self.next.update(key.clone(), value.clone());
+        self.inner.update(key, value);
     }
 
     fn delete<Q: Borrow<Self::Key>>(&mut self, key: &Q) -> CacheBrownsResult<Option<Self::Key>> {
+        // TODO: think through propagation
+        let _ = self.next.delete(key);
+        self.inner.delete(key)
+    }
+
+    fn take<Q: Borrow<Self::Key>>(&mut self, key: &Q) -> CacheBrownsResult<Option<(Self::Key, Cow<Self::Value>)>> {
         todo!()
     }
 
@@ -145,11 +187,13 @@ where
     }
 
     fn keys(&self) -> Self::KeyRefIterator<'_> {
-        todo!()
+        // From an external perspective, store is a monolith. Propagate to lowest (biggest) tier.
+        self.next.keys()
     }
 
     fn contains<Q: Borrow<Self::Key>>(&self, key: &Q) -> bool {
-        todo!()
+        // From an external perspective, store is a monolith. Propagate to lowest (biggest) tier.
+        self.next.contains(key)
     }
 }
 
@@ -159,34 +203,20 @@ where
 // to be able to represent the end of the array in some way. Rather than evaluating Option's at
 // runtime, we can create a fake no-op store as an end cap.
 
-/// A no-op tier
-///
-/// The [`Identity`] tier immediately "fails" to induce the Tiered store to try the next tier.
-struct Identity {
-    _p: (),
-}
+// TODO: Consider converting from struct to enum
 
-impl Identity {
-    pub fn new() -> Self {
-        Self { _p: () }
+#[cfg(test)]
+mod tests {
+    use crate::store::memory::MemoryStore;
+    use crate::store::tiered::{RippleMode, TieredStore};
+    use crate::store::Store;
+
+    #[test]
+    fn test() {
+        let mut store =
+            TieredStore::new(RippleMode::ShortCircuit, MemoryStore::new()).tier(MemoryStore::new());
+
+        store.put(0, 0);
+        assert_eq!(0, *store.get(&0).unwrap())
     }
 }
-
-
-
-
-// pub struct TieredStoreBuilder<S> {
-//     base:
-// }
-//
-// impl<S> TieredStoreBuilder<S> {
-//     pub fn new(base: S) -> Self {
-//         Self {
-//
-//         }
-//     }
-// }
-//
-// struct Stack<Inner, Outer> {
-//
-// }

@@ -333,6 +333,10 @@ where
         // underlying store, which may or may not be in memory
         self.index.borrow().contains_key(&KeyRef::from(key))
     }
+
+    fn take<Q: Borrow<Self::Key>>(&mut self, _key: &Q) -> CacheBrownsResult<Option<(Self::Key, Cow<Self::Value>)>> {
+        todo!()
+    }
 }
 
 #[cfg(test)]
@@ -656,17 +660,29 @@ mod tests {
             unimplemented!()
         }
 
+        fn poke<Q: Borrow<Self::Key>>(&self, _key: &Q) {
+            unimplemented!()
+        }
+
         fn peek<Q: Borrow<Self::Key>>(&self, _key: &Q) -> Option<Cow<Self::Value>> {
             unimplemented!()
         }
 
         fn put(&mut self, _key: Self::Key, _value: Self::Value) {}
 
+        fn update(&mut self, _key: Self::Key, _value: Self::Value) {
+            unimplemented!()
+        }
+
         fn delete<Q: Borrow<Self::Key>>(
             &mut self,
             _key: &Q,
         ) -> CacheBrownsResult<Option<Self::Key>> {
             Err(Box::new(std::io::Error::new(ErrorKind::Other, "stub")))
+        }
+
+        fn take<Q: Borrow<Self::Key>>(&mut self, _key: &Q) -> CacheBrownsResult<Option<(Self::Key, Cow<Self::Value>)>> {
+            unimplemented!()
         }
 
         fn flush(&mut self) -> Self::FlushResultIterator {

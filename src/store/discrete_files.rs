@@ -105,6 +105,8 @@ where
         self.peek(key)
     }
 
+    fn poke<Q: Borrow<Self::Key>>(&self, _key: &Q) { }
+
     fn peek<Q: Borrow<Key>>(&self, key: &Q) -> Option<Cow<Value>> {
         if let Some(path) = self.index.get(key.borrow()) {
             return Some(Cow::Owned(get::<Serde, Record<Key, Value>>(path)?.value));
@@ -118,8 +120,28 @@ where
         put::<Serde, Record<Key, Value>>(path, Record { key, value })
     }
 
+    fn update(&mut self, key: Self::Key, value: Self::Value) {
+        if self.contains(&key) {
+            self.put(key, value);
+        }
+    }
+
     fn delete<Q: Borrow<Self::Key>>(&mut self, key: &Q) -> CacheBrownsResult<Option<Key>> {
         delete::<Key>(&mut self.index, key.borrow())
+    }
+
+    fn take<Q: Borrow<Self::Key>>(
+        &mut self,
+        key: &Q,
+    ) -> CacheBrownsResult<Option<(Self::Key, Cow<Self::Value>)>> {
+        let entry = take::<Serde, Key, Record<Key, Value>>(&mut self.index, key.borrow())?;
+
+        match entry {
+            None => Ok(None),
+            Some((key, record)) => {
+                Ok(Some((key, Cow::Owned(record.value))))
+            }
+        }
     }
 
     fn flush(&mut self) -> Self::FlushResultIterator {
@@ -212,6 +234,8 @@ where
         self.peek(key)
     }
 
+    fn poke<Q: Borrow<Self::Key>>(&self, _key: &Q) { }
+
     fn peek<Q: Borrow<Key>>(&self, key: &Q) -> Option<Cow<Value>> {
         if let Some(path) = self.index.get(key.borrow()) {
             return get::<Serde, Value>(path).map(|v| Cow::Owned(v));
@@ -225,8 +249,26 @@ where
         put::<Serde, Value>(path, value)
     }
 
+    fn update(&mut self, key: Self::Key, value: Self::Value) {
+        if self.contains(&key) {
+            self.put(key, value);
+        }
+    }
+
     fn delete<Q: Borrow<Self::Key>>(&mut self, key: &Q) -> CacheBrownsResult<Option<Key>> {
         delete::<Key>(&mut self.index, key.borrow())
+    }
+
+    fn take<Q: Borrow<Self::Key>>(
+        &mut self,
+        key: &Q,
+    ) -> CacheBrownsResult<Option<(Self::Key, Cow<Self::Value>)>> {
+        let record = take::<Serde, Key, Value>(&mut self.index, key.borrow())?;
+
+        match record {
+            None => Ok(None),
+            Some(record) => Ok(Some((record.0, Cow::Owned(record.1))))
+        }
     }
 
     fn flush(&mut self) -> Self::FlushResultIterator {
@@ -269,12 +311,31 @@ where
 // Shared implementation of delete
 fn delete<Key>(index: &mut HashMap<Key, PathBuf>, key: &Key) -> CacheBrownsResult<Option<Key>>
 where
-    Key: Eq,
-    Key: Hash,
+    Key: Eq + Hash,
 {
     if let Some((key, path)) = index.remove_entry(key) {
         fs::remove_file(path).map_err(Box::new)?;
         return Ok(Some(key));
+    }
+
+    Ok(None)
+}
+
+fn take<Serde, Key, Value>(index: &mut HashMap<Key, PathBuf>, key: &Key) -> CacheBrownsResult<Option<(Key, Value)>>
+    where
+        Key: Eq + Hash,
+        Value: Clone + Serialize + for<'a> Deserialize<'a>,
+        Serde: DiscreteFileSerializerDeserializer<Value>,
+{
+    // Checking index an extra time is way faster than going to disk.
+    if let Some(path) = index.get(key) {
+        if let Some(value) = get::<Serde, Value>(path) {
+            if let Some(key) = delete(index, key)? {
+                // SAFETY: Above, we already checked confirmed key is present in index
+                index.remove(&key).unwrap();
+                return Ok(Some((key, value)));
+            }
+        }
     }
 
     Ok(None)
@@ -296,8 +357,7 @@ fn get_or_create_index_entry<Key>(
     key: Key,
 ) -> PathBuf
 where
-    Key: Eq,
-    Key: Hash,
+    Key: Eq + Hash,
 {
     index
         .entry(key)
