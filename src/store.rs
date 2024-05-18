@@ -4,20 +4,12 @@ use std::borrow::{Borrow, Cow};
 pub mod discrete_files;
 pub mod memory;
 pub mod replacement;
-mod tiered;
+pub mod tiered;
 
 // TODO: Demonstrate integration with fast external store like: https://crates.io/crates/scc
 // TODO: Add link for blog post
-// TODO: Evaluate the feel of default vs not default via peek vs poke. More I think about it, more the concern over defaults feels misguided.
-// most store impls will be pure stores after all. If you're doing a composite or replacement, you're plugged in enough to know what's up.
-// Additionally, even making the stores is pretty rare. If you chose to extend the library, how much do I really need to be paranoid about
-// preventing you from goofing up?
-// TODO: because of adding update, that resolved the question of blanket vs default. Update needs to be a default,
-// because it can be as store or as composite. Composite doesn't *need* to be, so this could be pulled out and blanket impl.
-// So, it comes down to is that clearer to have them distinct + does the blanket allow things to be passed normally as if
-// we were still using trait defaults. Still though, it seems goofy to have say polling "require" a composite store.
 
-/// A [`Store`] is the base layer of a [`super::managed_cache::ManagedCache`] that handles the
+/// A [`Store`] is the base layer of a [`crate::managed_cache::ManagedCache`] that handles the
 /// storage of data. The actual representation of the underlying data is arbitrary, and higher
 /// layers must consider that when working with the underlying data.
 ///
@@ -262,7 +254,7 @@ pub mod test_helpers {
 
         fn keys(&self) -> Self::KeyRefIterator<'_> {
             self.inner.keys()
-        }
+        }g
 
         fn contains<Q: Borrow<Self::Key>>(&self, key: &Q) -> bool {
             self.inner.contains(key.borrow())

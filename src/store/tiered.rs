@@ -66,56 +66,6 @@ where
     }
 }
 
-impl<Tier> Store for TieredStore<(), Tier>
-where
-    Tier: Store,
-{
-    type Key = Tier::Key;
-    type Value = Tier::Value;
-    type KeyRefIterator<'k> = Tier::KeyRefIterator<'k> where <Tier as Store>::Key: 'k, Self: 'k;
-    type FlushResultIterator = Tier::FlushResultIterator;
-
-    fn get<Q: Borrow<Self::Key>>(&self, key: &Q) -> Option<Cow<Self::Value>> {
-        self.next.get(key)
-    }
-
-    fn poke<Q: Borrow<Self::Key>>(&self, key: &Q) {
-        self.next.poke(key)
-    }
-
-    fn peek<Q: Borrow<Self::Key>>(&self, key: &Q) -> Option<Cow<Self::Value>> {
-        self.next.peek(key)
-    }
-
-    fn put(&mut self, key: Self::Key, value: Self::Value) {
-        self.next.put(key, value)
-    }
-
-    fn update(&mut self, key: Self::Key, value: Self::Value) {
-        self.next.update(key, value)
-    }
-
-    fn delete<Q: Borrow<Self::Key>>(&mut self, key: &Q) -> CacheBrownsResult<Option<Self::Key>> {
-        self.next.delete(key)
-    }
-
-    fn take<Q: Borrow<Self::Key>>(&mut self, key: &Q) -> CacheBrownsResult<Option<(Self::Key, Cow<Self::Value>)>> {
-        self.next.take(key)
-    }
-
-    fn flush(&mut self) -> Self::FlushResultIterator {
-        self.next.flush()
-    }
-
-    fn keys(&self) -> Self::KeyRefIterator<'_> {
-        self.next.keys()
-    }
-
-    fn contains<Q: Borrow<Self::Key>>(&self, key: &Q) -> bool {
-        self.next.contains(key)
-    }
-}
-
 impl<K, Tier, Next> Store for TieredStore<Tier, Next>
 where
     K: Clone,
@@ -145,8 +95,9 @@ where
         }
     }
 
-    fn poke<Q: Borrow<Self::Key>>(&self, _key: &Q) {
-        todo!()
+    fn poke<Q: Borrow<Self::Key>>(&self, key: &Q) {
+        self.next.poke(key);
+        self.inner.poke(key);
     }
 
     fn peek<Q: Borrow<Self::Key>>(&self, key: &Q) -> Option<Cow<Self::Value>> {
@@ -197,11 +148,55 @@ where
     }
 }
 
-// Because Store isn't object safe, we can't use a container like Vec. Ideally, we would just box
-// since the difference is near zero, and it's much more readable. We need to effectively create an
-// "array" of arbitrary store impls. Each entry is a Store with an arbitrary "next" store. We need
-// to be able to represent the end of the array in some way. Rather than evaluating Option's at
-// runtime, we can create a fake no-op store as an end cap.
+impl<Tier> Store for TieredStore<(), Tier>
+    where
+        Tier: Store,
+{
+    type Key = Tier::Key;
+    type Value = Tier::Value;
+    type KeyRefIterator<'k> = Tier::KeyRefIterator<'k> where <Tier as Store>::Key: 'k, Self: 'k;
+    type FlushResultIterator = Tier::FlushResultIterator;
+
+    fn get<Q: Borrow<Self::Key>>(&self, key: &Q) -> Option<Cow<Self::Value>> {
+        self.next.get(key)
+    }
+
+    fn poke<Q: Borrow<Self::Key>>(&self, key: &Q) {
+        self.next.poke(key)
+    }
+
+    fn peek<Q: Borrow<Self::Key>>(&self, key: &Q) -> Option<Cow<Self::Value>> {
+        self.next.peek(key)
+    }
+
+    fn put(&mut self, key: Self::Key, value: Self::Value) {
+        self.next.put(key, value)
+    }
+
+    fn update(&mut self, key: Self::Key, value: Self::Value) {
+        self.next.update(key, value)
+    }
+
+    fn delete<Q: Borrow<Self::Key>>(&mut self, key: &Q) -> CacheBrownsResult<Option<Self::Key>> {
+        self.next.delete(key)
+    }
+
+    fn take<Q: Borrow<Self::Key>>(&mut self, key: &Q) -> CacheBrownsResult<Option<(Self::Key, Cow<Self::Value>)>> {
+        self.next.take(key)
+    }
+
+    fn flush(&mut self) -> Self::FlushResultIterator {
+        self.next.flush()
+    }
+
+    fn keys(&self) -> Self::KeyRefIterator<'_> {
+        self.next.keys()
+    }
+
+    fn contains<Q: Borrow<Self::Key>>(&self, key: &Q) -> bool {
+        self.next.contains(key)
+    }
+}
 
 // TODO: Consider converting from struct to enum
 
