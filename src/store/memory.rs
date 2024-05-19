@@ -41,20 +41,23 @@ impl<Key: Eq + std::hash::Hash, Value: Clone> Store for MemoryStore<Key, Value> 
         self.data.get(key.borrow()).map(|v| Cow::Borrowed(v))
     }
 
-    fn put(&mut self, key: Key, value: Value) {
+    fn put(&mut self, key: Self::Key, value: Self::Value) -> CacheBrownsResult<()> {
         self.data.insert(key, value);
+        Ok(())
     }
 
-    fn update(&mut self, key: Self::Key, value: Self::Value) {
+    fn update(&mut self, key: Self::Key, value: Self::Value) -> CacheBrownsResult<()> {
         self.data.entry(key).and_modify(|v| *v = value);
+        Ok(())
     }
 
     fn delete<Q: Borrow<Self::Key>>(&mut self, key: &Q) -> CacheBrownsResult<Option<Key>> {
         Ok(self.data.remove_entry(key.borrow()).map(|(k, _v)| k))
     }
 
-    fn take<Q: Borrow<Self::Key>>(&mut self, key: &Q) -> CacheBrownsResult<Option<(Self::Key, Cow<Self::Value>)>> {
-        Ok(self.data.remove_entry(key.borrow()).map(|(k, v)| (k, Cow::Owned(v))))
+    fn take<Q: Borrow<Self::Key>>(&mut self, key: &Q) -> CacheBrownsResult<Option<(Self::Key, Self::Value)>> {
+        Ok(self.data.remove_entry(key.borrow()))
+            //.map(|(k, v)| (k, Cow::Owned(v))))
     }
 
     fn flush(&mut self) -> Self::FlushResultIterator {

@@ -112,7 +112,7 @@ mod tests {
             .expect_put()
             .once()
             .withf(|key, value| key == &42 && *value == 42)
-            .return_const(());
+            .returning(|_,_| Ok(()));
 
         data_source.expect_retrieve().return_once(|_key| Some(42));
 
@@ -161,7 +161,7 @@ mod tests {
             .expect_retrieve_with_hint()
             .once()
             .return_const(Some(55));
-        store.expect_put().once().return_const(());
+        store.expect_put().once().returning(|_, _| Ok(()));
 
         let store = MockStoreWrapper::new(store);
         let data_source = MockSorWrapper::new(data_source);

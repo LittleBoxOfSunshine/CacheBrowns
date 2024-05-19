@@ -115,15 +115,17 @@ where
         None
     }
 
-    fn put(&mut self, key: Key, value: Value) {
+    fn put(&mut self, key: Self::Key, value: Self::Value) -> CacheBrownsResult<()> {
         let path = get_or_create_index_entry(&self.cache_directory, &mut self.index, key.clone());
         put::<Serde, Record<Key, Value>>(path, Record { key, value })
     }
 
-    fn update(&mut self, key: Self::Key, value: Self::Value) {
+    fn update(&mut self, key: Self::Key, value: Self::Value) -> CacheBrownsResult<()> {
         if self.contains(&key) {
-            self.put(key, value);
+            return self.put(key, value)
         }
+
+        Ok(())
     }
 
     fn delete<Q: Borrow<Self::Key>>(&mut self, key: &Q) -> CacheBrownsResult<Option<Key>> {
@@ -133,15 +135,18 @@ where
     fn take<Q: Borrow<Self::Key>>(
         &mut self,
         key: &Q,
-    ) -> CacheBrownsResult<Option<(Self::Key, Cow<Self::Value>)>> {
-        let entry = take::<Serde, Key, Record<Key, Value>>(&mut self.index, key.borrow())?;
+    ) -> CacheBrownsResult<Option<(Self::Key, Self::Value)>> {
+        //let entry =
+        Ok(take::<Serde, Key, Record<Key, Value>>(&mut self.index, key.borrow())?
+            .map(|(k, v)| (k, v.value)))
+            //?;
 
-        match entry {
-            None => Ok(None),
-            Some((key, record)) => {
-                Ok(Some((key, Cow::Owned(record.value))))
-            }
-        }
+        // match entry {
+        //     None => Ok(None),
+        //     Some((key, record)) => {
+        //         Ok(Some((key, Cow::Owned(record.value))))
+        //     }
+        // }
     }
 
     fn flush(&mut self) -> Self::FlushResultIterator {
@@ -244,15 +249,17 @@ where
         None
     }
 
-    fn put(&mut self, key: Key, value: Value) {
+    fn put(&mut self, key: Self::Key, value: Self::Value) -> CacheBrownsResult<()> {
         let path = get_or_create_index_entry(&self.cache_directory, &mut self.index, key);
         put::<Serde, Value>(path, value)
     }
 
-    fn update(&mut self, key: Self::Key, value: Self::Value) {
+    fn update(&mut self, key: Self::Key, value: Self::Value) -> CacheBrownsResult<()> {
         if self.contains(&key) {
-            self.put(key, value);
+            return self.put(key, value);
         }
+
+        Ok(())
     }
 
     fn delete<Q: Borrow<Self::Key>>(&mut self, key: &Q) -> CacheBrownsResult<Option<Key>> {
@@ -262,13 +269,15 @@ where
     fn take<Q: Borrow<Self::Key>>(
         &mut self,
         key: &Q,
-    ) -> CacheBrownsResult<Option<(Self::Key, Cow<Self::Value>)>> {
-        let record = take::<Serde, Key, Value>(&mut self.index, key.borrow())?;
+    ) -> CacheBrownsResult<Option<(Self::Key, Self::Value)>> {
+        // let record =
+            take::<Serde, Key, Value>(&mut self.index, key.borrow())
+                //?;
 
-        match record {
-            None => Ok(None),
-            Some(record) => Ok(Some((record.0, Cow::Owned(record.1))))
-        }
+        // match record {
+        //     None => Ok(None),
+        //     Some(record) => Ok(Some((record.0, Cow::Owned(record.1))))
+        // }
     }
 
     fn flush(&mut self) -> Self::FlushResultIterator {
@@ -298,13 +307,14 @@ where
 }
 
 // Shared implementation of put
-fn put<Serde, Value>(path: PathBuf, value: Value)
+fn put<Serde, Value>(path: PathBuf, value: Value) -> CacheBrownsResult<()>
 where
     Value: Serialize + for<'a> Deserialize<'a>,
     Serde: DiscreteFileSerializerDeserializer<Value>,
 {
-    if let Ok(file) = File::create(path) {
-        Serde::serialize(BufWriter::new(file), &value)
+    match File::create(path) {
+        Ok(file) => Serde::serialize(BufWriter::new(file), &value),
+        Err(e) => Err(Box::new(e))
     }
 }
 
@@ -390,7 +400,7 @@ pub trait DiscreteFileSerializerDeserializer<Value>
 where
     for<'a> Value: Serialize + Deserialize<'a>,
 {
-    fn serialize(buffered_writer: BufWriter<File>, value: &Value);
+    fn serialize(buffered_writer: BufWriter<File>, value: &Value) -> CacheBrownsResult<()>;
 
     fn deserialize(buffered_reader: BufReader<File>) -> Option<Value>;
 }
@@ -412,8 +422,9 @@ impl<Value> DiscreteFileSerializerDeserializer<Value>
 where
     for<'a> Value: Serialize + Deserialize<'a>,
 {
-    fn serialize(buffered_writer: BufWriter<File>, value: &Value) {
-        let _ = serde_json::to_writer(buffered_writer, &value);
+    fn serialize(buffered_writer: BufWriter<File>, value: &Value) -> CacheBrownsResult<()> {
+        Ok(serde_json::to_writer(buffered_writer, &value)
+            .map_err(|e| Box::new(e))?)
     }
 
     fn deserialize(buffered_reader: BufReader<File>) -> Option<Value> {
@@ -433,8 +444,9 @@ impl<Value> DiscreteFileSerializerDeserializer<Value>
 where
     for<'a> Value: Serialize + Deserialize<'a>,
 {
-    fn serialize(buffered_writer: BufWriter<File>, value: &Value) {
-        let _ = bincode::serialize_into(buffered_writer, &value);
+    fn serialize(buffered_writer: BufWriter<File>, value: &Value) -> CacheBrownsResult<()> {
+        Ok(bincode::serialize_into(buffered_writer, &value)
+            .map_err(|e| Box::new(e))?)
     }
 
     fn deserialize(buffered_reader: BufReader<File>) -> Option<Value> {

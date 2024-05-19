@@ -275,19 +275,17 @@ where
         self.store.peek(key)
     }
 
-    fn update(&mut self, key: Self::Key, value: Self::Value) {
+    fn update(&mut self, key: Self::Key, value: Self::Value) -> CacheBrownsResult<()> {
         self.store.update(key, value)
     }
 
-    fn put(&mut self, key: Self::Key, value: Self::Value) {
+    fn put(&mut self, key: Self::Key, value: Self::Value) -> CacheBrownsResult<()> {
         if self.index.borrow().len() >= self.max_capacity.get()
             // If the key is already present, this is an update and no eviction should occur
             && !self.contains(&key)
         {
             // We failed to evict, so to honor space limit we can't insert
-            if self.try_delete_last().is_err() {
-                return;
-            }
+            self.try_delete_last()?;
         }
 
         // Update
@@ -299,7 +297,7 @@ where
             self.add_to_usage_order(key.clone());
         }
 
-        self.store.put(key, value);
+        self.store.put(key, value)
     }
 
     fn delete<Q: Borrow<Self::Key>>(&mut self, key: &Q) -> CacheBrownsResult<Option<Self::Key>> {
@@ -334,7 +332,7 @@ where
         self.index.borrow().contains_key(&KeyRef::from(key))
     }
 
-    fn take<Q: Borrow<Self::Key>>(&mut self, _key: &Q) -> CacheBrownsResult<Option<(Self::Key, Cow<Self::Value>)>> {
+    fn take<Q: Borrow<Self::Key>>(&mut self, _key: &Q) -> CacheBrownsResult<Option<(Self::Key, Self::Value)>> {
         todo!()
     }
 }
@@ -621,8 +619,8 @@ mod tests {
     fn put_exits_when_underlying_store_fails() {
         let mut store =
             LruReplacement::new(NonZeroUsize::new(1).unwrap(), FailingMemoryStore::new()).unwrap();
-        store.put(1, 1);
-        store.put(2, 1);
+        assert!(store.put(1, 1).is_ok());
+        assert!(store.put(2, 1).is_err());
 
         assert!(store.contains(&1));
         assert!(!store.contains(&2));
@@ -668,9 +666,11 @@ mod tests {
             unimplemented!()
         }
 
-        fn put(&mut self, _key: Self::Key, _value: Self::Value) {}
+        fn put(&mut self, key: Self::Key, value: Self::Value) -> CacheBrownsResult<()> {
+            Ok(())
+        }
 
-        fn update(&mut self, _key: Self::Key, _value: Self::Value) {
+        fn update(&mut self, key: Self::Key, value: Self::Value) -> CacheBrownsResult<()> {
             unimplemented!()
         }
 
@@ -681,7 +681,7 @@ mod tests {
             Err(Box::new(std::io::Error::new(ErrorKind::Other, "stub")))
         }
 
-        fn take<Q: Borrow<Self::Key>>(&mut self, _key: &Q) -> CacheBrownsResult<Option<(Self::Key, Cow<Self::Value>)>> {
+        fn take<Q: Borrow<Self::Key>>(&mut self, _key: &Q) -> CacheBrownsResult<Option<(Self::Key, Self::Value)>> {
             unimplemented!()
         }
 

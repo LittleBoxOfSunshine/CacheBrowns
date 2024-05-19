@@ -85,14 +85,16 @@ pub trait Store {
     /// 1. Happen as an implementation detail of the [`Store`] itself
     /// 2. The [`Store`] should accept a callback that is invoked when failures occur
     /// 3. Use composition to wrap a component with a fallible put concept where the error is recorded then suppressed to satisfy the [`Store`] trait.
-    fn put(&mut self, key: Self::Key, value: Self::Value);
+    fn put(&mut self, key: Self::Key, value: Self::Value) -> CacheBrownsResult<()>;
 
     /// Update the key-value pair in the [`Store`], if they key is present. This serves 2 purposes:
     /// 1. For correctness in composite caches. A [`Hydrator`] views a composite cache as a monolith,
     ///    so when it refreshes data the composite needs this context to ensure it updates the data
     ///    only where it is already present, not shifting data between internal stores.
     /// 2. Allows the store to optimize if the internal implementation of contains can provide a hint for the write operation.
-    fn update(&mut self, key: Self::Key, value: Self::Value);
+    ///
+    /// If the key is no longer present when an [`update`] is called, it will no-op and return [`Ok`]
+    fn update(&mut self, key: Self::Key, value: Self::Value) -> CacheBrownsResult<()>;
 
     /// Remove a record from the store. We cannot guarantee that a store is infallible, nor can the
     /// store know whether other layers care about failures or how they would respond. Most of the
@@ -126,10 +128,11 @@ pub trait Store {
     /// See [`delete`]. Take is [`delete`] that also returns the value. [`get`] can be expensive, but
     /// when we do need the value even if it may be expensive, a [`take`] implementation may be more
     /// optimized than a [`get`] followed by [`delete`].
+    /// TODO: Was there a in-crate scenario for this or merely just flexibility offered to users? Maybe multi-tier with promote/demote?
     fn take<Q: Borrow<Self::Key>>(
         &mut self,
         key: &Q,
-    ) -> CacheBrownsResult<Option<(Self::Key, Cow<Self::Value>)>>;
+    ) -> CacheBrownsResult<Option<(Self::Key, Self::Value)>>;
 
     // TODO: Add integration test covering the delete fails leads to no correctness issues to prove the claim in doc comment above.
 
@@ -167,11 +170,11 @@ pub mod test_helpers {
             unimplemented!()
         }
 
-        pub fn put(&mut self, _key: i32, _value: i32) {
+        pub fn put(&mut self, _key: i32, _value: i32) -> CacheBrownsResult<()> {
             unimplemented!()
         }
 
-        pub fn update(&mut self, _key: i32, _value: i32) {
+        pub fn update(&mut self, _key: i32, _value: i32) -> CacheBrownsResult<()> {
             unimplemented!()
         }
 
@@ -179,7 +182,7 @@ pub mod test_helpers {
             unimplemented!()
         }
 
-        pub fn take<'a>(&mut self, _key: &i32) -> CacheBrownsResult<Option<(i32, Cow<'a, i32>)>> {
+        pub fn take(&mut self, _key: &i32) -> CacheBrownsResult<Option<(i32, i32)>> {
             unimplemented!()
         }
 
@@ -229,11 +232,11 @@ pub mod test_helpers {
             self.inner.peek(key.borrow())
         }
 
-        fn put(&mut self, key: Self::Key, value: Self::Value) {
+        fn put(&mut self, key: Self::Key, value: Self::Value) -> CacheBrownsResult<()> {
             self.inner.put(key, value)
         }
 
-        fn update(&mut self, key: Self::Key, value: Self::Value) {
+        fn update(&mut self, key: Self::Key, value: Self::Value) -> CacheBrownsResult<()> {
             self.inner.update(key, value)
         }
 
@@ -244,7 +247,7 @@ pub mod test_helpers {
             self.inner.delete(key.borrow())
         }
 
-        fn take<Q: Borrow<Self::Key>>(&mut self, key: &Q) -> CacheBrownsResult<Option<(Self::Key, Cow<Self::Value>)>> {
+        fn take<Q: Borrow<Self::Key>>(&mut self, key: &Q) -> CacheBrownsResult<Option<(Self::Key, Self::Value)>> {
             self.inner.take(key.borrow())
         }
 
@@ -254,7 +257,7 @@ pub mod test_helpers {
 
         fn keys(&self) -> Self::KeyRefIterator<'_> {
             self.inner.keys()
-        }g
+        }
 
         fn contains<Q: Borrow<Self::Key>>(&self, key: &Q) -> bool {
             self.inner.contains(key.borrow())
