@@ -687,6 +687,7 @@ mod tests {
         assert!(!store.0.contains(&VALID_DATA2_KEY));
     }
 
+    #[allow(clippy::type_complexity)]
     fn non_volatile_from_path(
         dir: &TempDir,
     ) -> Result<
