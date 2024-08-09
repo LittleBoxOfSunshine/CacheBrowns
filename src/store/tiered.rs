@@ -277,11 +277,81 @@ mod tests {
     use crate::store::Store;
 
     #[test]
-    fn test() {
+    fn happy_path() {
         let mut store =
             TieredStore::new(RippleMode::ShortCircuit, MemoryStore::new()).tier(MemoryStore::new());
 
         assert!(store.put(0, 0).is_ok());
         assert_eq!(0, *store.get(&0).unwrap())
+    }
+
+    #[test]
+    fn unified_cache_side_effects_propagate() {
+
+    }
+
+    #[test]
+    fn short_circuit_cache_side_effects_do_not_propagate() {
+
+    }
+
+    #[test]
+    fn get_from_lower_tier() {
+
+    }
+
+    #[test]
+    fn get_from_lower_tier_repeats_due_to_upper_tier_insert_failure() {
+
+    }
+
+    #[test]
+    fn poke_always_propagates() {
+
+    }
+
+    #[test]
+    fn flush_with_mixed_failures() {
+
+    }
+
+    #[test]
+    fn flush_happy_path() {
+
+    }
+
+    #[test]
+    fn update_cascades() {
+
+    }
+
+    #[test]
+    fn update_lower_tier_fails() {
+
+    }
+
+    #[test]
+    fn update_upper_tier_fails_then_evicts_no_rollbacks_occur() {
+
+    }
+
+    #[test]
+    fn take_propagates_delete() {
+
+    }
+
+    #[test]
+    fn keys_merges_all_layers() {
+
+    }
+
+    #[test]
+    fn contains_cascades() {
+
+    }
+
+    #[test]
+    fn contains_early_exit() {
+
     }
 }
