@@ -501,7 +501,7 @@ mod tests {
 
     macro_rules! flush_clears_dir {
         ($store: ident, $dir: ident) => {
-            $store.put(42, 42);
+            $store.put(42, 42).unwrap();
             assert!($store.contains(&42));
 
             $store.flush();
@@ -523,13 +523,13 @@ mod tests {
         ($store: ident) => {
             assert!(!$store.contains(&42));
 
-            $store.put(42, 42);
+            $store.put(42, 42).unwrap();
             assert!($store.contains(&42));
 
-            $store.put(45, 42);
+            $store.put(45, 42).unwrap();
             assert!($store.contains(&42));
 
-            $store.put(42, 0);
+            $store.put(42, 0).unwrap();
             assert!($store.contains(&42));
 
             $store.delete(&42).unwrap();
@@ -551,15 +551,15 @@ mod tests {
         ($func: ident, $store: ident) => {
             assert_eq!(None, $store.get(&42));
 
-            $store.put(42, 42);
+            $store.put(42, 42).unwrap();
             assert_eq!(42, $store.$func(&42).unwrap().into_owned());
             assert_eq!(None, $store.$func(&45));
 
-            $store.put(45, 42);
+            $store.put(45, 42).unwrap();
             assert_eq!(42, $store.$func(&42).unwrap().into_owned());
             assert_eq!(42, $store.$func(&45).unwrap().into_owned());
 
-            $store.put(42, 55);
+            $store.put(42, 55).unwrap();
             assert_eq!(55, $store.$func(&42).unwrap().into_owned());
             assert_eq!(42, $store.$func(&45).unwrap().into_owned());
         };
@@ -589,13 +589,13 @@ mod tests {
         ($store: ident) => {
             assert_eq!(0, $store.keys().count());
 
-            $store.put(42, 42);
+            $store.put(42, 42).unwrap();
             assert_eq!(1, $store.keys().count());
 
-            $store.put(45, 45);
+            $store.put(45, 45).unwrap();
             assert_eq!(2, $store.keys().count());
 
-            $store.put(45, 50);
+            $store.put(45, 50).unwrap();
             let keys: BTreeSet<&u32> = $store.keys().collect();
             assert!(keys.contains(&42));
             assert!(keys.contains(&45));
@@ -615,8 +615,8 @@ mod tests {
 
     macro_rules! delete {
         ($store: ident) => {
-            $store.put(42, 42);
-            $store.put(45, 42);
+            $store.put(42, 42).unwrap();
+            $store.put(45, 42).unwrap();
             assert!($store.contains(&42));
             assert!($store.contains(&45));
 
@@ -650,7 +650,7 @@ mod tests {
     #[test]
     fn volatile_store_clears_clears_data_on_clean_exit() {
         let (mut store, dir) = create_volatile_scenario().unwrap();
-        store.put(45, 45);
+        store.put(45, 45).unwrap();
 
         assert_eq!(1, store.keys().count());
         assert_eq!(1, std::fs::read_dir(dir.path()).unwrap().count());
@@ -733,7 +733,7 @@ mod tests {
 
         let dir = TempDir::new("test").unwrap();
         let mut store = DiscreteFileStoreVolatileJson::new(dir.path()).unwrap();
-        store.put(32, foo.clone());
+        store.put(32, foo.clone()).unwrap();
 
         assert_eq!(foo, store.get(&32).unwrap().into_owned())
     }

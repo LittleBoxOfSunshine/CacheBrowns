@@ -34,10 +34,10 @@ pub enum CacheLookupSuccess<Value: Clone> {
 }
 
 impl<Value: Clone> CacheLookupSuccess<Value> {
-    pub fn new(store_result: StoreResult, hydrated: bool, value: Value) -> Self {
+    pub fn new(store_result: StoreResult, did_fetch_from_sor: bool, value: Value) -> Self {
         match store_result {
             StoreResult::Invalid => {
-                if hydrated {
+                if did_fetch_from_sor {
                     CacheLookupSuccess::Refresh(value)
                 } else {
                     CacheLookupSuccess::Stale(value)

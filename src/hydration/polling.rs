@@ -107,8 +107,9 @@ where
                 if let Some(v) = canonical_value.as_ref() {
                     let mut store_handle = shared_inner_state.store.write().unwrap();
 
+                    // TODO: During telemetry pass, consider making this not silent
                     // Respect delete if delete occurred during retrieval
-                    store_handle.update(key, v.clone());
+                    let _ = store_handle.update(key, v.clone());
                 }
             }
         }
@@ -137,7 +138,8 @@ where
                     .data_source
                     .retrieve(key)
                     .map(|value: Self::Value| {
-                        self.shared_inner_state
+                        // TODO: During telemetry pass, consider making this not silent
+                        let _ = self.shared_inner_state
                             .store
                             .write()
                             .unwrap()

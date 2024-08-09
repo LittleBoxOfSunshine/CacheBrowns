@@ -35,7 +35,8 @@ where
             }
             None => match self.data_source.retrieve(key) {
                 Some(value) => {
-                    self.store.put(key.borrow().clone(), value.clone());
+                    // TODO: During telemetry pass, consider making this not silent
+                    let _ = self.store.put(key.borrow().clone(), value.clone());
                     Some(CacheLookupSuccess::new(StoreResult::NotFound, true, value))
                 }
                 None => None,
@@ -76,7 +77,8 @@ where
         } else {
             match self.data_source.retrieve_with_hint(key, &value) {
                 Some(new_value) => {
-                    self.store.put((*key).clone(), new_value.clone());
+                    // TODO: During telemetry pass, consider making this not silent
+                    let _ = self.store.put((*key).clone(), new_value.clone());
                     Some(CacheLookupSuccess::new(
                         StoreResult::Invalid,
                         true,

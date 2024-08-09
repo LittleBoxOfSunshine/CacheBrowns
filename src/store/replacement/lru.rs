@@ -382,8 +382,8 @@ mod tests {
     #[test]
     fn capacity_exceeded_oldest_key_removed() {
         let mut store = lru(1);
-        store.put(0, 1);
-        store.put(1, 1);
+        store.put(0, 1).unwrap();
+        store.put(1, 1).unwrap();
 
         assert_eq!(None, store.get(&0));
         assert_eq!(1, store.index.borrow().len());
@@ -393,8 +393,8 @@ mod tests {
     #[test]
     fn peek_no_side_effects() {
         let mut store = lru(2);
-        store.put(0, 1);
-        store.put(1, 1);
+        store.put(0, 1).unwrap();
+        store.put(1, 1).unwrap();
 
         assert_key_is_most_recent(&store, 1);
         let _ = store.peek(&0);
@@ -404,8 +404,8 @@ mod tests {
     #[test]
     fn get_marks_as_latest() {
         let mut store = lru(2);
-        store.put(0, 1);
-        store.put(1, 1);
+        store.put(0, 1).unwrap();
+        store.put(1, 1).unwrap();
 
         assert_key_is_most_recent(&store, 1);
         let _ = store.get(&0);
@@ -415,13 +415,13 @@ mod tests {
     #[test]
     fn put_existing_value_updates_and_marked_latest() {
         let mut store = lru(2);
-        store.put(0, 1);
-        store.put(1, 1);
+        store.put(0, 1).unwrap();
+        store.put(1, 1).unwrap();
 
         // Confirm latest as invariant
         assert_key_is_most_recent(&store, 1);
 
-        store.put(0, 42);
+        store.put(0, 42).unwrap();
 
         // Confirm original value is now latest
         assert_key_is_most_recent(&store, 0);
@@ -433,10 +433,10 @@ mod tests {
     #[test]
     fn put_would_evict_but_is_update() {
         let mut store = lru(2);
-        store.put(0, 1);
-        store.put(1, 1);
+        store.put(0, 1).unwrap();
+        store.put(1, 1).unwrap();
 
-        store.put(0, 2);
+        store.put(0, 2).unwrap();
 
         assert!(store.store.contains(&0));
         assert!(store.store.contains(&1));
@@ -450,11 +450,11 @@ mod tests {
     #[test]
     fn usage_order_always_shifts_one_right() {
         let mut store = lru(5);
-        store.put(0, 1);
-        store.put(1, 1);
-        store.put(2, 1);
-        store.put(3, 1);
-        store.put(4, 1);
+        store.put(0, 1).unwrap();
+        store.put(1, 1).unwrap();
+        store.put(2, 1).unwrap();
+        store.put(3, 1).unwrap();
+        store.put(4, 1).unwrap();
 
         validate_usage_order(vec![4, 3, 2, 1, 0], &store);
 
@@ -488,7 +488,7 @@ mod tests {
     #[test]
     fn delete_removes_from_index_and_propagates() {
         let mut store = lru(1);
-        store.put(0, 1);
+        store.put(0, 1).unwrap();
         assert!(store.store.contains(&0));
 
         assert_eq!(None, store.delete(&1).unwrap());
@@ -500,9 +500,9 @@ mod tests {
     #[test]
     fn flush_no_index_and_propagates() {
         let mut store = lru(3);
-        store.put(0, 1);
-        store.put(1, 1);
-        store.put(2, 1);
+        store.put(0, 1).unwrap();
+        store.put(1, 1).unwrap();
+        store.put(2, 1).unwrap();
 
         let deleted_keys: BTreeSet<u32> = store.flush().map(|x| x.unwrap()).collect();
         assert_equal(BTreeSet::from_iter(vec![0, 1, 2]), deleted_keys);
@@ -513,9 +513,9 @@ mod tests {
     #[test]
     fn store_has_initial_data_index_build() {
         let mut store = MemoryStore::new();
-        store.put(0, 1);
-        store.put(1, 1);
-        store.put(2, 1);
+        store.put(0, 1).unwrap();
+        store.put(1, 1).unwrap();
+        store.put(2, 1).unwrap();
 
         let store = LruReplacement::new(NonZeroUsize::new(3).unwrap(), store).unwrap();
 
@@ -529,9 +529,9 @@ mod tests {
     #[test]
     fn store_has_too_much_initial_data_records_purged_valid_index() {
         let mut store = MemoryStore::new();
-        store.put(1, 1);
-        store.put(2, 1);
-        store.put(4, 1);
+        store.put(1, 1).unwrap();
+        store.put(2, 1).unwrap();
+        store.put(4, 1).unwrap();
 
         let store = LruReplacement::new(NonZeroUsize::new(2).unwrap(), store).unwrap();
 
@@ -560,37 +560,37 @@ mod tests {
         let mut store = lru(5);
         let underlying_store = unsafe { &(*ptr::from_ref(&store.store)) };
 
-        store.put(0, 0);
+        store.put(0, 0).unwrap();
         assert_keys_and_contains_match(underlying_store, &store);
 
-        store.put(1, 1);
+        store.put(1, 1).unwrap();
         assert_keys_and_contains_match(underlying_store, &store);
 
-        store.put(1, 2);
+        store.put(1, 2).unwrap();
         assert_keys_and_contains_match(underlying_store, &store);
 
-        store.put(2, 2);
+        store.put(2, 2).unwrap();
         assert_keys_and_contains_match(underlying_store, &store);
 
-        store.put(3, 2);
+        store.put(3, 2).unwrap();
         assert_keys_and_contains_match(underlying_store, &store);
 
-        store.put(4, 2);
+        store.put(4, 2).unwrap();
         assert_keys_and_contains_match(underlying_store, &store);
 
-        store.put(4, 2);
+        store.put(4, 2).unwrap();
         assert_keys_and_contains_match(underlying_store, &store);
 
-        store.put(4, 2);
+        store.put(4, 2).unwrap();
         assert_keys_and_contains_match(underlying_store, &store);
 
-        store.put(5, 2);
+        store.put(5, 2).unwrap();
         assert_keys_and_contains_match(underlying_store, &store);
 
-        store.put(6, 2);
+        store.put(6, 2).unwrap();
         assert_keys_and_contains_match(underlying_store, &store);
 
-        store.put(5, 2);
+        store.put(5, 2).unwrap();
         assert_keys_and_contains_match(underlying_store, &store);
 
         store.delete(&4).unwrap();
@@ -666,11 +666,11 @@ mod tests {
             unimplemented!()
         }
 
-        fn put(&mut self, key: Self::Key, value: Self::Value) -> CacheBrownsResult<()> {
+        fn put(&mut self, _key: Self::Key, _value: Self::Value) -> CacheBrownsResult<()> {
             Ok(())
         }
 
-        fn update(&mut self, key: Self::Key, value: Self::Value) -> CacheBrownsResult<()> {
+        fn update(&mut self, _key: Self::Key, _value: Self::Value) -> CacheBrownsResult<()> {
             unimplemented!()
         }
 
