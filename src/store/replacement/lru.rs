@@ -332,7 +332,10 @@ where
         self.index.borrow().contains_key(&KeyRef::from(key))
     }
 
-    fn take<Q: Borrow<Self::Key>>(&mut self, _key: &Q) -> CacheBrownsResult<Option<(Self::Key, Self::Value)>> {
+    fn take<Q: Borrow<Self::Key>>(
+        &mut self,
+        _key: &Q,
+    ) -> CacheBrownsResult<Option<(Self::Key, Self::Value)>> {
         todo!()
     }
 }
@@ -681,7 +684,10 @@ mod tests {
             Err(Box::new(std::io::Error::new(ErrorKind::Other, "stub")))
         }
 
-        fn take<Q: Borrow<Self::Key>>(&mut self, _key: &Q) -> CacheBrownsResult<Option<(Self::Key, Self::Value)>> {
+        fn take<Q: Borrow<Self::Key>>(
+            &mut self,
+            _key: &Q,
+        ) -> CacheBrownsResult<Option<(Self::Key, Self::Value)>> {
             unimplemented!()
         }
 

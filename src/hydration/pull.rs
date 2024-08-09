@@ -114,7 +114,7 @@ mod tests {
             .expect_put()
             .once()
             .withf(|key, value| key == &42 && *value == 42)
-            .returning(|_,_| Ok(()));
+            .returning(|_, _| Ok(()));
 
         data_source.expect_retrieve().return_once(|_key| Some(42));
 

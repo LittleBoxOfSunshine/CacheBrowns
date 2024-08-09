@@ -21,7 +21,7 @@ pub enum RippleMode {
     /// the tiers to consider eviction based on the usage pattern of the whole tiered cache rather
     /// than
     ///
-    /// For example, if we have a two tier cache of Lru<Mem>; Lru<Disk> and a [`Store::get`] call
+    /// For example, if we have a two tier cache of `Lru<Mem>; Lru<Disk>` and a [`Store::get`] call
     /// was satisfied by the Mem store, but we still want the usage order to be impacted in both
     /// tiers. If you have different tiers of different sizes, you may want the eviction policies
     /// + state to match.
@@ -105,14 +105,17 @@ where
     type Key = Tier::Key;
     type Value = Tier::Value;
     type KeyRefIterator<'k> = Next::KeyRefIterator<'k> where Self::Key: 'k, Self: 'k;
-    type FlushResultIterator = std::iter::Chain<<Next as Store>::FlushResultIterator, <Tier as Store>::FlushResultIterator>;
+    type FlushResultIterator = std::iter::Chain<
+        <Next as Store>::FlushResultIterator,
+        <Tier as Store>::FlushResultIterator,
+    >;
 
     fn get<Q: Borrow<Self::Key>>(&self, key: &Q) -> Option<Cow<Self::Value>> {
         let borrow = self.inner.as_ptr();
-        let asdf = unsafe { (*borrow).get(key) };
+        let current_tier_value = unsafe { (*borrow).get(key) };
 
         // Walk down tiers until value is found.
-        match asdf {
+        match current_tier_value {
             Some(value) => {
                 // Tiers closer to top of stack are faster, so we want to exit early, but we need to
                 // apply the appropriate ripple mode effects first.
@@ -130,11 +133,14 @@ where
                     Some(value) => {
                         // Best effort, there is no correctness issue we're just attempting to use
                         // the higher cache tier (i.e. self) for future reads.
-                        let _ = self.inner.borrow_mut().put(key.borrow().clone(), value.clone().into_owned());
+                        let _ = self
+                            .inner
+                            .borrow_mut()
+                            .put(key.borrow().clone(), value.clone().into_owned());
                         Some(value)
                     }
                 }
-            },
+            }
         }
     }
 
@@ -153,7 +159,12 @@ where
     }
 
     fn put(&mut self, key: Self::Key, value: Self::Value) -> CacheBrownsResult<()> {
-        Self::inner_put(&mut*self.next.borrow_mut(), &mut*self.inner.borrow_mut(), key, value)
+        Self::inner_put(
+            &mut *self.next.borrow_mut(),
+            &mut *self.inner.borrow_mut(),
+            key,
+            value,
+        )
     }
 
     fn update(&mut self, key: Self::Key, value: Self::Value) -> CacheBrownsResult<()> {
@@ -166,13 +177,14 @@ where
         self.inner.borrow_mut().delete(key)
     }
 
-    fn take<Q: Borrow<Self::Key>>(&mut self, key: &Q) -> CacheBrownsResult<Option<(Self::Key, Self::Value)>> {
+    fn take<Q: Borrow<Self::Key>>(
+        &mut self,
+        key: &Q,
+    ) -> CacheBrownsResult<Option<(Self::Key, Self::Value)>> {
         // Delete needs to succeed or fail at base to avoid rollbacks
         match self.next.borrow_mut().take(key)? {
             // No failure, but not present. May be present here, so try take.
-            None => {
-                self.inner.borrow_mut().take(key)
-            }
+            None => self.inner.borrow_mut().take(key),
             // Attempt to cascade up the stack, we already have value so use cheaper delete
             Some(lower_value) => {
                 match self.inner.borrow_mut().delete(key) {
@@ -180,7 +192,7 @@ where
                     // We have a value, but we need to ensure higher tiers don't attempt deletes to
                     // prevent rollbacks
                     // TODO: Consider having the option always returned so it could still propagate the value?
-                    Err(e) => Err(e)
+                    Err(e) => Err(e),
                 }
             }
         }
@@ -204,8 +216,8 @@ where
 }
 
 impl<Tier> Store for TieredStore<(), Tier>
-    where
-        Tier: Store,
+where
+    Tier: Store,
 {
     type Key = Tier::Key;
     type Value = Tier::Value;
@@ -236,7 +248,10 @@ impl<Tier> Store for TieredStore<(), Tier>
         self.next.borrow_mut().delete(key)
     }
 
-    fn take<Q: Borrow<Self::Key>>(&mut self, key: &Q) -> CacheBrownsResult<Option<(Self::Key, Self::Value)>> {
+    fn take<Q: Borrow<Self::Key>>(
+        &mut self,
+        key: &Q,
+    ) -> CacheBrownsResult<Option<(Self::Key, Self::Value)>> {
         self.next.borrow_mut().take(key)
     }
 

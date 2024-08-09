@@ -32,12 +32,12 @@ pub mod tiered;
 /// Implicitly, there exists the notion of 3 kinds of stores:
 ///
 /// 1. `Pure Store` - Isn't managing or consider other stores
-/// 2. `Replacement` - Composes another store to provide data management. Why [`peek`] is needed.
-/// 3. `Composite Store` - Combines multiple pure stores and/or replacements. Why [`poke`] is needed.
+/// 2. `Replacement` - Composes another store to provide data management. Why [`Store::peek`] is needed.
+/// 3. `Composite Store` - Combines multiple pure stores and/or replacements. Why [`Store::poke`] is needed.
 ///
-/// There isn't a great way to encode these differences into the type system. The [`peek`] and
-/// [`poke`] functions aren't needed for pure stores. A pure store can always impl [`peek`] as
-/// [`get`] and [`poke`] as a no-op. We want maximum flexibility in composition, so these can't be
+/// There isn't a great way to encode these differences into the type system. The [`Store::peek`] and
+/// [`Store::poke`] functions aren't needed for pure stores. A pure store can always impl [`Store::peek`] as
+/// [`Store::get`] and [`Store::poke`] as a no-op. We want maximum flexibility in composition, so these can't be
 /// pulled out into a distinct trait. See this blog post for a detailed explanation.
 pub trait Store {
     type Key;
@@ -54,11 +54,11 @@ pub trait Store {
 
     /// Get a copy of the value associated with the key, if it exists. This function must induce any
     /// side effects that are appropriate for the semantics of the implementation. For example, if
-    /// the store is an LRU, calls to [`get`] must induce the side effect of updating the usage
+    /// the store is an LRU, calls to [`Store::get`] must induce the side effect of updating the usage
     /// order.
     fn get<Q: Borrow<Self::Key>>(&self, key: &Q) -> Option<Cow<Self::Value>>;
 
-    /// Complement of [`get`]. A [`poke`] will cause the side effects of a read to occur without
+    /// Complement of [`Store::get`]. A [`Store::poke`] will cause the side effects of a read to occur without
     /// actually reading the data. Fetching unneeded data is wasteful in general, but in some cases
     /// the arbitrary underlying store may be expensive to fetch data from (e.g. if it requires
     /// deserialization). In these cases, the compiler also can't necessarily optimize this out for
@@ -90,12 +90,12 @@ pub trait Store {
     fn put(&mut self, key: Self::Key, value: Self::Value) -> CacheBrownsResult<()>;
 
     /// Update the key-value pair in the [`Store`], if they key is present. This serves 2 purposes:
-    /// 1. For correctness in composite caches. A [`Hydrator`] views a composite cache as a monolith,
+    /// 1. For correctness in composite caches. A [`crate::hydration::Hydrator`] views a composite cache as a monolith,
     ///    so when it refreshes data the composite needs this context to ensure it updates the data
     ///    only where it is already present, not shifting data between internal stores.
     /// 2. Allows the store to optimize if the internal implementation of contains can provide a hint for the write operation.
     ///
-    /// If the key is no longer present when an [`update`] is called, it will no-op and return [`Ok`]
+    /// If the key is no longer present when an [`Store::update`] is called, it will no-op and return [`Ok`]
     fn update(&mut self, key: Self::Key, value: Self::Value) -> CacheBrownsResult<()>;
 
     // TODO: peeked_update as update without side effects for polling hydrator?
@@ -126,12 +126,12 @@ pub trait Store {
     /// unclear to the user it's still present and can become a memory leak.
     ///
     /// Does not return `Option<Value>`, because getting the value may be expensive. If you want the
-    /// deleted value, use [`take`].
+    /// deleted value, use [`Store::take`].
     fn delete<Q: Borrow<Self::Key>>(&mut self, key: &Q) -> CacheBrownsResult<Option<Self::Key>>;
 
-    /// See [`delete`]. Take is [`delete`] that also returns the value. [`get`] can be expensive, but
-    /// when we do need the value even if it may be expensive, a [`take`] implementation may be more
-    /// optimized than a [`get`] followed by [`delete`].
+    /// See [`Store::delete`]. Take is [`Store::delete`] that also returns the value. [`Store::get`] can be expensive, but
+    /// when we do need the value even if it may be expensive, a [`Store::take`] implementation may be more
+    /// optimized than a [`Store::get`] followed by [`Store::delete`].
     /// TODO: Was there a in-crate scenario for this or merely just flexibility offered to users? Maybe multi-tier with promote/demote?
     fn take<Q: Borrow<Self::Key>>(
         &mut self,
@@ -251,7 +251,10 @@ pub mod test_helpers {
             self.inner.delete(key.borrow())
         }
 
-        fn take<Q: Borrow<Self::Key>>(&mut self, key: &Q) -> CacheBrownsResult<Option<(Self::Key, Self::Value)>> {
+        fn take<Q: Borrow<Self::Key>>(
+            &mut self,
+            key: &Q,
+        ) -> CacheBrownsResult<Option<(Self::Key, Self::Value)>> {
             self.inner.take(key.borrow())
         }
 

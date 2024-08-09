@@ -105,7 +105,7 @@ where
         self.peek(key)
     }
 
-    fn poke<Q: Borrow<Self::Key>>(&self, _key: &Q) { }
+    fn poke<Q: Borrow<Self::Key>>(&self, _key: &Q) {}
 
     fn peek<Q: Borrow<Key>>(&self, key: &Q) -> Option<Cow<Value>> {
         if let Some(path) = self.index.get(key.borrow()) {
@@ -122,7 +122,7 @@ where
 
     fn update(&mut self, key: Self::Key, value: Self::Value) -> CacheBrownsResult<()> {
         if self.contains(&key) {
-            return self.put(key, value)
+            return self.put(key, value);
         }
 
         Ok(())
@@ -137,9 +137,11 @@ where
         key: &Q,
     ) -> CacheBrownsResult<Option<(Self::Key, Self::Value)>> {
         //let entry =
-        Ok(take::<Serde, Key, Record<Key, Value>>(&mut self.index, key.borrow())?
-            .map(|(k, v)| (k, v.value)))
-            //?;
+        Ok(
+            take::<Serde, Key, Record<Key, Value>>(&mut self.index, key.borrow())?
+                .map(|(k, v)| (k, v.value)),
+        )
+        //?;
 
         // match entry {
         //     None => Ok(None),
@@ -239,7 +241,7 @@ where
         self.peek(key)
     }
 
-    fn poke<Q: Borrow<Self::Key>>(&self, _key: &Q) { }
+    fn poke<Q: Borrow<Self::Key>>(&self, _key: &Q) {}
 
     fn peek<Q: Borrow<Key>>(&self, key: &Q) -> Option<Cow<Value>> {
         if let Some(path) = self.index.get(key.borrow()) {
@@ -271,8 +273,8 @@ where
         key: &Q,
     ) -> CacheBrownsResult<Option<(Self::Key, Self::Value)>> {
         // let record =
-            take::<Serde, Key, Value>(&mut self.index, key.borrow())
-                //?;
+        take::<Serde, Key, Value>(&mut self.index, key.borrow())
+        //?;
 
         // match record {
         //     None => Ok(None),
@@ -314,7 +316,7 @@ where
 {
     match File::create(path) {
         Ok(file) => Serde::serialize(BufWriter::new(file), &value),
-        Err(e) => Err(Box::new(e))
+        Err(e) => Err(Box::new(e)),
     }
 }
 
@@ -331,11 +333,14 @@ where
     Ok(None)
 }
 
-fn take<Serde, Key, Value>(index: &mut HashMap<Key, PathBuf>, key: &Key) -> CacheBrownsResult<Option<(Key, Value)>>
-    where
-        Key: Eq + Hash,
-        Value: Clone + Serialize + for<'a> Deserialize<'a>,
-        Serde: DiscreteFileSerializerDeserializer<Value>,
+fn take<Serde, Key, Value>(
+    index: &mut HashMap<Key, PathBuf>,
+    key: &Key,
+) -> CacheBrownsResult<Option<(Key, Value)>>
+where
+    Key: Eq + Hash,
+    Value: Clone + Serialize + for<'a> Deserialize<'a>,
+    Serde: DiscreteFileSerializerDeserializer<Value>,
 {
     // Checking index an extra time is way faster than going to disk.
     if let Some(path) = index.get(key) {
@@ -423,8 +428,7 @@ where
     for<'a> Value: Serialize + Deserialize<'a>,
 {
     fn serialize(buffered_writer: BufWriter<File>, value: &Value) -> CacheBrownsResult<()> {
-        Ok(serde_json::to_writer(buffered_writer, &value)
-            .map_err(|e| Box::new(e))?)
+        Ok(serde_json::to_writer(buffered_writer, &value).map_err(|e| Box::new(e))?)
     }
 
     fn deserialize(buffered_reader: BufReader<File>) -> Option<Value> {
@@ -445,8 +449,7 @@ where
     for<'a> Value: Serialize + Deserialize<'a>,
 {
     fn serialize(buffered_writer: BufWriter<File>, value: &Value) -> CacheBrownsResult<()> {
-        Ok(bincode::serialize_into(buffered_writer, &value)
-            .map_err(|e| Box::new(e))?)
+        Ok(bincode::serialize_into(buffered_writer, &value).map_err(|e| Box::new(e))?)
     }
 
     fn deserialize(buffered_reader: BufReader<File>) -> Option<Value> {

@@ -35,7 +35,7 @@ impl<Key: Eq + std::hash::Hash, Value: Clone> Store for MemoryStore<Key, Value> 
         self.peek(key)
     }
 
-    fn poke<Q: Borrow<Self::Key>>(&self, _key: &Q) { }
+    fn poke<Q: Borrow<Self::Key>>(&self, _key: &Q) {}
 
     fn peek<Q: Borrow<Key>>(&self, key: &Q) -> Option<Cow<Value>> {
         self.data.get(key.borrow()).map(|v| Cow::Borrowed(v))
@@ -55,7 +55,10 @@ impl<Key: Eq + std::hash::Hash, Value: Clone> Store for MemoryStore<Key, Value> 
         Ok(self.data.remove_entry(key.borrow()).map(|(k, _v)| k))
     }
 
-    fn take<Q: Borrow<Self::Key>>(&mut self, key: &Q) -> CacheBrownsResult<Option<(Self::Key, Self::Value)>> {
+    fn take<Q: Borrow<Self::Key>>(
+        &mut self,
+        key: &Q,
+    ) -> CacheBrownsResult<Option<(Self::Key, Self::Value)>> {
         Ok(self.data.remove_entry(key.borrow()))
     }
 

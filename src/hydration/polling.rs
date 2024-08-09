@@ -139,7 +139,8 @@ where
                     .retrieve(key)
                     .map(|value: Self::Value| {
                         // TODO: During telemetry pass, consider making this not silent
-                        let _ = self.shared_inner_state
+                        let _ = self
+                            .shared_inner_state
                             .store
                             .write()
                             .unwrap()
