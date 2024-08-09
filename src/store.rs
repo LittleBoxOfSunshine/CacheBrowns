@@ -48,6 +48,8 @@ pub trait Store {
         Self::Key: 'k,
         Self: 'k;
 
+    // TODO: Why was it ok not to have keys returned with failures? Presumably was an optimization and/or avoid Clone on Key
+    // TODO: Should it be a multimap? This is useful for Tiered store but redundant on individual stores
     type FlushResultIterator: Iterator<Item = CacheBrownsResult<Self::Key>>;
 
     /// Get a copy of the value associated with the key, if it exists. This function must induce any
@@ -96,6 +98,8 @@ pub trait Store {
     /// If the key is no longer present when an [`update`] is called, it will no-op and return [`Ok`]
     fn update(&mut self, key: Self::Key, value: Self::Value) -> CacheBrownsResult<()>;
 
+    // TODO: peeked_update as update without side effects for polling hydrator?
+
     /// Remove a record from the store. We cannot guarantee that a store is infallible, nor can the
     /// store know whether other layers care about failures or how they would respond. Most of the
     /// time it's best to just suppress or propagate the error when inner logic encounters it.
@@ -105,10 +109,10 @@ pub trait Store {
     ///
     /// Retries may not be desirable, the cache needs to be responsive and predictable. If you are
     /// building on top of a layer, do not introduce retries. It is the responsibility of the
-    /// underlying layer to ensure all efforts have been made. This runs afoul of common patterns
-    /// for error handling, particularly handling failures in cloud architecture. We still want the
-    /// same goal, to avoid exponential increases in retry count, be we can't know if a retry makes
-    /// sense or what it's impact is when traveling down the stack of layers.
+    /// underlying layer to ensure all efforts have been made. Doing otherwise would run afoul of
+    /// common patterns for error handling, particularly handling failures in cloud architecture.
+    /// We still want the same goal, to avoid exponential increases in retry count, be we can't know
+    /// if a retry makes sense or what it's impact is when traveling down the stack of layers.
     ///
     /// Considering correctness, the cache doesn't offer the ability to purge individual records in
     /// an invalidation context, only to stop tracking. This means that even if a record should have

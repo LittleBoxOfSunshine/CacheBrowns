@@ -2,7 +2,6 @@ use crate::store::Store;
 use crate::CacheBrownsResult;
 use std::borrow::{Borrow, Cow};
 use std::cell::RefCell;
-
 /*
 Tiered works with ripple propagation
 So, if you want an LRU 2 tier (for scenario where you really just
@@ -50,7 +49,6 @@ pub enum RippleMode {
 /// because writes are infallible, but we could have a situation where the eviction policy of `T1`
 /// leads the value to be evicted. Now, the next read of the value will be exposed to the prior
 /// state still held in `T2` effectively "rolling back" the data.
-
 pub struct TieredStore<Tier, Next> {
     inner: RefCell<Tier>,
     next: RefCell<Next>,
@@ -107,7 +105,7 @@ where
     type Key = Tier::Key;
     type Value = Tier::Value;
     type KeyRefIterator<'k> = Next::KeyRefIterator<'k> where Self::Key: 'k, Self: 'k;
-    type FlushResultIterator = Next::FlushResultIterator;
+    type FlushResultIterator = std::iter::Chain<<Next as Store>::FlushResultIterator, <Tier as Store>::FlushResultIterator>;
 
     fn get<Q: Borrow<Self::Key>>(&self, key: &Q) -> Option<Cow<Self::Value>> {
         let borrow = self.inner.as_ptr();
@@ -189,11 +187,9 @@ where
     }
 
     fn flush(&mut self) -> Self::FlushResultIterator {
-        // TODO: If puts aren't transactional (they aren't currently because success/fail isn't communicated)
-        // then this may not match. Other issue that comes to mind is coherency. If update fails at lower
-        // layer we'll have mixed results. Probably need to make put communicate now since new scenarios came up.
-        self.inner.borrow_mut().flush();
-        self.next.borrow_mut().flush()
+        let low_tiers = self.next.borrow_mut().flush();
+        let flushed_here = self.inner.borrow_mut().flush();
+        low_tiers.chain(flushed_here)
     }
 
     fn keys(&self) -> Self::KeyRefIterator<'_> {
@@ -241,7 +237,6 @@ impl<Tier> Store for TieredStore<(), Tier>
     }
 
     fn take<Q: Borrow<Self::Key>>(&mut self, key: &Q) -> CacheBrownsResult<Option<(Self::Key, Self::Value)>> {
-        //unsafe { (*self.next.as_ptr()).peek(key) }
         self.next.borrow_mut().take(key)
     }
 

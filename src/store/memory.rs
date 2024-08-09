@@ -57,7 +57,6 @@ impl<Key: Eq + std::hash::Hash, Value: Clone> Store for MemoryStore<Key, Value> 
 
     fn take<Q: Borrow<Self::Key>>(&mut self, key: &Q) -> CacheBrownsResult<Option<(Self::Key, Self::Value)>> {
         Ok(self.data.remove_entry(key.borrow()))
-            //.map(|(k, v)| (k, Cow::Owned(v))))
     }
 
     fn flush(&mut self) -> Self::FlushResultIterator {
@@ -86,9 +85,9 @@ mod tests {
     #[test]
     fn flush() {
         let mut store = MemoryStore::new();
-        store.put(&1, 1);
-        store.put(&2, 1);
-        store.put(&3, 1);
+        store.put(&1, 1).unwrap();
+        store.put(&2, 1).unwrap();
+        store.put(&3, 1).unwrap();
 
         assert_eq!(3, store.keys().len());
 
