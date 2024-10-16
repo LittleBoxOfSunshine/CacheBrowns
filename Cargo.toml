@@ -17,6 +17,8 @@ uuid = { version = "1.3.3", features = ["v4"] }
 interruptible_polling = "0.2.0"
 thiserror = "1.0.58"
 itertools = "0.12.1"
+# TODO: Scope to actually used features + use latest version
+tokio = { version = "=1.29.1", features = ["full"] }
 
 [dev-dependencies]
 derive_builder = "0.20.0"

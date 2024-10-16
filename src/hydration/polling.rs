@@ -10,7 +10,7 @@ use crate::store::Store;
 
 use super::{CacheLookupSuccess, Hydrator, StoreResult};
 
-/// [`PollingHydrationStrategy`] initially hydrates values the same way that [`super::pull::PullCacheHydrator`]
+/// [`PollingHydrator`] initially hydrates values the same way that [`super::pull::PullHydrator`]
 /// does, by immediately fetching the missing data from the [`SourceOfRecord`], but it refreshes
 /// data by polling the [`SourceOfRecord`] for updates rather than as needed when stale data is
 /// encountered.
@@ -19,7 +19,7 @@ use super::{CacheLookupSuccess, Hydrator, StoreResult};
 /// If your data source can be overwhelmed, or you need to avoid wasting cycles this way, the
 /// provided [`SourceOfRecord`] must internally enforce this logic. See [`crate::source_of_record::concurrent`]
 /// for generic wrappers.
-pub struct PollingHydrationStrategy<S, Sor>
+pub struct PollingHydrator<S, Sor>
 where
     S: Store + Send + Sync + 'static,
     Sor: SourceOfRecord + Send + Sync + 'static,
@@ -39,7 +39,7 @@ where
     store: RwLock<S>,
 }
 
-impl<S, Sor> PollingHydrationStrategy<S, Sor>
+impl<S, Sor> PollingHydrator<S, Sor>
 where
     S: Store + Send + Sync,
     S::Key: Clone,
@@ -57,7 +57,7 @@ where
         interval_updater: F,
     ) -> Self
     where
-        F: Fn(&Duration) + Send + 'static,
+        F: Fn(&mut Duration) + Send + 'static,
     {
         let shared_state = Arc::new(InnerState {
             data_source,
@@ -116,7 +116,7 @@ where
     }
 }
 
-impl<Key, Value, S, Sor> Hydrator for PollingHydrationStrategy<S, Sor>
+impl<Key, Value, S, Sor> Hydrator for PollingHydrator<S, Sor>
 where
     Key: Clone,
     Value: Clone,
@@ -177,4 +177,118 @@ where
 }
 
 #[cfg(test)]
-mod tests {}
+mod tests {
+    use mockall::predicate;
+    use mockall::predicate::eq;
+    use crate::hydration::polling::PollingHydrator;
+    use crate::source_of_record::test_helpers::{MockSor, MockSorWrapper};
+    use crate::store::test_helpers::{MockStore, MockStoreWrapper};
+    use std::time::Duration;
+    use std::borrow::Cow;
+    use crate::hydration::{CacheLookupSuccess, Hydrator};
+
+    const CONTINUOUS: Duration = Duration::from_secs(0);
+
+    fn base_fakes() -> (MockStore, MockSor) {
+        (MockStore::new(), MockSor::new())
+    }
+
+    #[test]
+    fn self_updating_constructs() {
+        // This is reusing library code, so just confirm that things construct and destruct.
+        let (mut store, data_source) = base_fakes();
+
+        store.expect_keys().return_const(vec![].into_iter());
+        store.expect_peek().return_const(None);
+
+        let polling = PollingHydrator::new_self_updating(
+            MockSorWrapper::new(data_source),
+            MockStoreWrapper::new(store),
+            CONTINUOUS,
+            |interval| {
+                *interval = CONTINUOUS;
+            },
+        );
+        // Arbitrary time to let things run for before interrupting via drop.
+        std::thread::sleep(Duration::from_millis(200));
+    }
+
+    #[test]
+    fn not_found_on_demand_succeeds() {
+        let (mut store, mut data_source) = base_fakes();
+
+        store.expect_keys().return_const(vec![].into_iter());
+        store.expect_peek().return_const(None);
+        store.expect_get().return_const(None);
+        store.expect_put().once().returning(|_, _| Ok(()));
+        data_source.expect_retrieve().return_const(Some(42));
+
+        let mut polling = PollingHydrator::new(
+            MockSorWrapper::new(data_source),
+            MockStoreWrapper::new(store),
+            CONTINUOUS,
+        );
+        polling.get(&32).is_some();
+    }
+
+    #[test]
+    fn not_found_on_demand_fails() {
+        let (mut store, mut data_source) = base_fakes();
+
+        store.expect_keys().return_const(vec![].into_iter());
+        store.expect_peek().return_const(None);
+        store.expect_get().return_const(None);
+        data_source.expect_retrieve().return_const(None);
+
+        let mut polling = PollingHydrator::new(
+            MockSorWrapper::new(data_source),
+            MockStoreWrapper::new(store),
+            CONTINUOUS,
+        );
+        polling.get(&32).is_some();
+    }
+
+    #[test]
+    fn found_no_fetch_fresh_or_stale() {
+        let (mut store, mut data_source) = base_fakes();
+
+        store.expect_keys().return_const(vec![&32].into_iter());
+        store.expect_peek().return_const(Some(Cow::Owned(42)));
+        store.expect_get().return_const(Some(Cow::Owned(42)));
+        data_source.expect_is_valid().withf(|k,v| k == &32 && *v == 42).return_const(true);
+        data_source.expect_is_valid().withf(|k,v| k == &32 && *v == 42).return_const(false);
+
+        let mut polling = PollingHydrator::new(
+            MockSorWrapper::new(data_source),
+            MockStoreWrapper::new(store),
+            CONTINUOUS,
+        );
+        polling.get(&32).is_some_and(|v| v == CacheLookupSuccess::Hit(42));
+        polling.get(&32).is_some_and(|v| v == CacheLookupSuccess::Stale(42));
+    }
+
+    #[test]
+    fn poll_during_on_demand() {
+
+    }
+
+    #[test]
+    fn on_demand_during_poll() {
+
+    }
+
+    #[test]
+    fn deleted_before_poll_remains_deleted() {
+
+    }
+
+    #[test]
+    fn delete_during_poll_remains_deleted() {
+
+    }
+
+    #[test]
+    fn stop_tracking_during_read_and_write() {
+
+    }
+}

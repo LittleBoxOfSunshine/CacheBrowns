@@ -4,19 +4,19 @@ use crate::store::Store;
 use crate::CacheBrownsResult;
 use std::borrow::Borrow;
 
-/// [`PullCacheHydrator`] hydrates the cache by immediately calling out to the [`SourceOfRecord`]
+/// [`PullHydrator`] hydrates the cache by immediately calling out to the [`SourceOfRecord`]
 /// any time data is missing or stale to attempt to provide current data.
 ///
 /// Note, this hydrator does not attempt to prevent parallel or redundant calls to the [`SourceOfRecord`].
 /// If your data source can be overwhelmed, or you need to avoid wasting cycles this way, the
 /// provided [`SourceOfRecord`] must internally enforce this logic. See [`crate::source_of_record::concurrent`]
 /// for generic wrappers.
-pub struct PullCacheHydrator<S, Sor> {
+pub struct PullHydrator<S, Sor> {
     store: S,
     data_source: Sor,
 }
 
-impl<K, V, S, Sor> Hydrator for PullCacheHydrator<S, Sor>
+impl<K, V, S, Sor> Hydrator for PullHydrator<S, Sor>
 where
     K: Clone,
     V: Clone,
@@ -56,7 +56,7 @@ where
     }
 }
 
-impl<Key, Value, S, Sor> PullCacheHydrator<S, Sor>
+impl<Key, Value, S, Sor> PullHydrator<S, Sor>
 where
     Key: Clone,
     Value: Clone,
@@ -93,7 +93,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use crate::hydration::pull::PullCacheHydrator;
+    use crate::hydration::pull::PullHydrator;
     use crate::hydration::{CacheLookupSuccess, Hydrator};
     use crate::source_of_record::test_helpers::{MockSor, MockSorWrapper};
     use crate::store::test_helpers::{MockStore, MockStoreWrapper};
@@ -123,7 +123,7 @@ mod tests {
 
         assert_eq!(
             Some(CacheLookupSuccess::Miss(42)),
-            PullCacheHydrator::new(store, data_source).get(&42)
+            PullHydrator::new(store, data_source).get(&42)
         );
     }
 
@@ -137,7 +137,7 @@ mod tests {
         let store = MockStoreWrapper::new(store);
         let data_source = MockSorWrapper::new(data_source);
 
-        assert_eq!(None, PullCacheHydrator::new(store, data_source).get(&42));
+        assert_eq!(None, PullHydrator::new(store, data_source).get(&42));
     }
 
     #[test]
@@ -167,7 +167,7 @@ mod tests {
 
         let store = MockStoreWrapper::new(store);
         let data_source = MockSorWrapper::new(data_source);
-        let mut hydrator = PullCacheHydrator::new(store, data_source);
+        let mut hydrator = PullHydrator::new(store, data_source);
 
         assert_eq!(Some(CacheLookupSuccess::Hit(42)), hydrator.get(&42));
 
@@ -183,7 +183,7 @@ mod tests {
 
         let store = MockStoreWrapper::new(store);
         let data_source = MockSorWrapper::new(data_source);
-        let mut hydrator = PullCacheHydrator::new(store, data_source);
+        let mut hydrator = PullHydrator::new(store, data_source);
         assert_eq!(0, hydrator.flush().len());
     }
 
@@ -200,7 +200,7 @@ mod tests {
 
         let store = MockStoreWrapper::new(store);
         let data_source = MockSorWrapper::new(data_source);
-        let mut hydrator = PullCacheHydrator::new(store, data_source);
+        let mut hydrator = PullHydrator::new(store, data_source);
 
         hydrator.stop_tracking(&42).unwrap()
     }

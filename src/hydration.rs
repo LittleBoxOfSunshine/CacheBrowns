@@ -10,7 +10,17 @@ pub trait Hydrator {
 
     type FlushResultIterator: Iterator<Item = CacheBrownsResult<Self::Key>>;
 
-    // TODO: What would it take for this to be Cow?
+    // TODO: Should we have a special version of Cow where the Borrow variant can take a lock handle?
+    // This would allow us to return the borrowed data without thread safety issues if the hydrator
+    // has internal locking, like it does in the case of Polling. Downsides are a custom type, more
+    // complexity. Upside is that having to copy a value every time you use it is a bit yikes. Is it
+    // better to just say yeah, it's expensive so you should use Arc if you care about this? Pub-sub
+    // will also have this issue. The question is what balance to have, because either is adding
+    // slight overhead for the non-threaded hydrators like Pull. With custom Cow, that overhead is
+    // just passing a None around though so pretty light. Another downside is that letting external
+    // users hold references means they're exposed to a more complicated borrow checker interaction.
+    // Is it already the case in some other respect though? Is the ref based version and more
+    // cumbersome than any existing instances?
     fn get<Q: Borrow<Self::Key>>(&mut self, key: &Q) -> Option<CacheLookupSuccess<Self::Value>>;
 
     fn flush(&mut self) -> Self::FlushResultIterator;
