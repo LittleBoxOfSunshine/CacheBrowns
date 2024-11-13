@@ -1,6 +1,7 @@
 use crate::hydration::{CacheLookupSuccess, Hydrator};
 use crate::managed_cache::CacheLookupFailure::NotFound;
 use crate::CacheBrownsResult;
+use std::borrow::Borrow;
 
 pub enum CacheLookupFailure {
     /// No valid value could be fetched.
@@ -37,8 +38,11 @@ where
         }
     }
 
-    pub fn get(&mut self, key: &Key) -> Result<CacheLookupSuccess<Value>, CacheLookupFailure> {
-        match self.hydrator.get(key) {
+    pub async fn get<Q: Borrow<Key> + Sync>(
+        &mut self,
+        key: &Q,
+    ) -> Result<CacheLookupSuccess<Value>, CacheLookupFailure> {
+        match self.hydrator.get(key).await {
             None => Err(NotFound),
             Some(lookup_result) => {
                 if let CacheLookupSuccess::Stale(_) = &lookup_result {
@@ -66,8 +70,8 @@ where
     /// meantime you deploy recovery actions that hook into this method.
     ///
     /// IF YOU ARE USING THIS TO TRY TO LOOPHOLE A CACHE INVALIDATION, YOU ARE GOING TO BREAK THINGS
-    pub fn flush(&mut self) -> H::FlushResultIterator {
-        self.hydrator.flush()
+    pub async fn flush(&mut self) -> H::FlushResultIterator {
+        self.hydrator.flush().await
     }
 
     /// Indicates that a given key is no longer relevant and can be purged. For example, a client
@@ -75,7 +79,24 @@ where
     /// is used, or as an optimization to free the resource earlier than it otherwise would be.
     ///
     /// IF YOU ARE USING THIS TO TRY TO LOOPHOLE A CACHE INVALIDATION, YOU ARE GOING TO BREAK THINGS
-    pub fn stop_tracking(&mut self, key: &Key) -> CacheBrownsResult<()> {
-        self.hydrator.stop_tracking(key)
+    ///
+    /// If you are using an unbounded cache (no Replacement strategy) you must consider how to handle
+    /// errors, retries, and repeated errors. A failure to do so can result in a memory leak.
+    pub async fn stop_tracking<Q: Borrow<Key> + Sync>(&mut self, key: &Q) -> CacheBrownsResult<()> {
+        self.hydrator.stop_tracking(key).await
     }
 }
+
+//#[cfg(feature = "tokio")]
+//impl<Key, Value, H> tokio_service::Service for ManagedCache<Key, Value, H>
+//where Q: Borrow<Key>
+// {
+//     type Request = impl Borrow<Key>;//Q;
+//     type Response = CacheLookupSuccess<Value>;
+//     type Error = CacheLookupFailure;
+//     type Future = impl Future<Item = Self::Response, Error = Self::Error>;
+//
+//     fn call(&self, key: Self::Request) -> Self::Future {
+//         self.get(key)
+//     }
+// }

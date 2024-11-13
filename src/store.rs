@@ -37,11 +37,56 @@ pub mod tiered;
 ///
 /// There isn't a great way to encode these differences into the type system. The [`Store::peek`] and
 /// [`Store::poke`] functions aren't needed for pure stores. A pure store can always impl [`Store::peek`] as
-/// [`Store::get`] and [`Store::poke`] as a no-op. We want maximum flexibility in composition, so these can't be
+/// [`Store::get`] and [`Store::poke`] as a no-op. We want maximum flexibility in composition, so these cant be
 /// pulled out into a distinct trait. See this blog post for a detailed explanation.
+///
+/// ## Replacement and Thread Safety
+///
+/// Replacement layers pose a trade-off for the design. The distinction between a Replacement and
+/// a Pure Store is that [`get`] potentially has side effects, meaning interior mutability.
+///
+/// ### All functions mutable
+/// If we make [`get`] mutable, we preclude hyrdators from making optimizations on internal locking. We
+/// can't avoid that by continuing to bubble up thread safety responsibility either because it leaks
+/// aspects of the behaviors we are trying to abstract away in the first place and because it
+/// precludes yet more optimization.
+///
+/// ### A `Replacement` trait
+/// Making distinct traits doesn't work well, because there's no place in code where we'd ever want
+/// to restrict users from injecting Replacement strategies. If we require it everywhere, it's just
+/// alternative semantics. An identity Replacement struct would have to be used to wrap Basic Stores
+/// so that hyrdators, all expecting Replacements, can accept them.
+///
+/// For this to pay off, [`Hydrator`] must have a Replacement and Pure Store variant of its
+/// implementation. In this way, it can use optimized behavior where available and take
+/// responsibility for thread safety instead when it can't.
+///
+/// This is certainly an option. The pros are that it allows you to always pick the best
+/// implementation based on the type you're actually given. The cons are adding more implementations
+/// and additional user complexity. They need to be aware of the different variants and there's
+/// additional boilerplate for them to contend with.
+///
+/// ### Interior Mutability
+/// With interior mutability, the [`get`] call itself can continue to be read only, with the write
+/// aspects handled internally. This is very attractive, because we're not leaking the side effects
+/// into the trait. Additionally, this can be done quite performantly, especially if we are willing
+/// to accept relaxed ordering for very closely timed events. By leveraging queues internally, at
+/// most the queue operation has an interior critical section. The [`Lru`] implementation leverages
+/// this approach.
+///
+/// In the prototype build we've elected for this option. It's the cleanest, most flexible, and the
+/// least code. These are all important qualities for rapid iteration and time to market. Given this
+/// project is experimental, we believe real world usage is the best way to figure out what's best.
+/// Additionally, if it turns out the dedicated Replacement trait approach, or another, ends up
+/// being the case having a substantial amount of real world usage would justify the additional
+/// investment required.
+///
+/// In the end, the overhead here is extremely small, especially in the async context. This isn't
+/// going to make or break the implementation in either direction.
+#[trait_variant::make(Send)]
 pub trait Store {
-    type Key;
-    type Value: Clone;
+    type Key: Send + Sync;
+    type Value: Clone + Send + Sync;
 
     type KeyRefIterator<'k>: Iterator<Item = &'k Self::Key>
     where
@@ -56,7 +101,7 @@ pub trait Store {
     /// side effects that are appropriate for the semantics of the implementation. For example, if
     /// the store is an LRU, calls to [`Store::get`] must induce the side effect of updating the usage
     /// order.
-    fn get<Q: Borrow<Self::Key>>(&self, key: &Q) -> Option<Cow<Self::Value>>;
+    async fn get<Q: Borrow<Self::Key> + Sync>(&self, key: &Q) -> Option<Cow<Self::Value>>;
 
     /// Complement of [`Store::get`]. A [`Store::poke`] will cause the side effects of a read to occur without
     /// actually reading the data. Fetching unneeded data is wasteful in general, but in some cases
@@ -64,14 +109,14 @@ pub trait Store {
     /// deserialization). In these cases, the compiler also can't necessarily optimize this out for
     /// you as it may be unclear of other side effects exist. Thus, the implementor needs to
     /// communicate this themselves. Also makes the intent of the caller clear.
-    fn poke<Q: Borrow<Self::Key>>(&self, _key: &Q);
+    async fn poke<Q: Borrow<Self::Key> + Sync>(&self, _key: &Q);
 
     /// A platform read of a value. When replacement strategies are used (e.g. LRU) reads have side
     /// effects that update internal tracking. If hydration requires inspecting the current state,
     /// these reads will skew tracking. Peek allows you to inspect state without side effects, it
     /// signals to any layer that a platform read has occurred that should be ignored for usage
     /// tracking purposes.
-    fn peek<Q: Borrow<Self::Key>>(&self, key: &Q) -> Option<Cow<Self::Value>>;
+    async fn peek<Q: Borrow<Self::Key> + Sync>(&self, key: &Q) -> Option<Cow<Self::Value>>;
 
     /// Insert or update the key-value pair in the [`Store`]. This is infallible because the caller
     /// can't do anything useful based on the underlying error coming from an unknown origin and
@@ -87,7 +132,7 @@ pub trait Store {
     /// 1. Happen as an implementation detail of the [`Store`] itself
     /// 2. The [`Store`] should accept a callback that is invoked when failures occur
     /// 3. Use composition to wrap a component with a fallible put concept where the error is recorded then suppressed to satisfy the [`Store`] trait.
-    fn put(&mut self, key: Self::Key, value: Self::Value) -> CacheBrownsResult<()>;
+    async fn put(&mut self, key: Self::Key, value: Self::Value) -> CacheBrownsResult<()>;
 
     /// Update the key-value pair in the [`Store`], if they key is present. This serves 2 purposes:
     /// 1. For correctness in composite caches. A [`crate::hydration::Hydrator`] views a composite cache as a monolith,
@@ -96,7 +141,7 @@ pub trait Store {
     /// 2. Allows the store to optimize if the internal implementation of contains can provide a hint for the write operation.
     ///
     /// If the key is no longer present when an [`Store::update`] is called, it will no-op and return [`Ok`]
-    fn update(&mut self, key: Self::Key, value: Self::Value) -> CacheBrownsResult<()>;
+    async fn update(&mut self, key: Self::Key, value: Self::Value) -> CacheBrownsResult<()>;
 
     // TODO: peeked_update as update without side effects for polling hydrator?
 
@@ -127,13 +172,16 @@ pub trait Store {
     ///
     /// Does not return `Option<Value>`, because getting the value may be expensive. If you want the
     /// deleted value, use [`Store::take`].
-    fn delete<Q: Borrow<Self::Key>>(&mut self, key: &Q) -> CacheBrownsResult<Option<Self::Key>>;
+    async fn delete<Q: Borrow<Self::Key> + Sync>(
+        &mut self,
+        key: &Q,
+    ) -> CacheBrownsResult<Option<Self::Key>>;
 
     /// See [`Store::delete`]. Take is [`Store::delete`] that also returns the value. [`Store::get`] can be expensive, but
     /// when we do need the value even if it may be expensive, a [`Store::take`] implementation may be more
     /// optimized than a [`Store::get`] followed by [`Store::delete`].
     /// TODO: Was there a in-crate scenario for this or merely just flexibility offered to users? Maybe multi-tier with promote/demote?
-    fn take<Q: Borrow<Self::Key>>(
+    async fn take<Q: Borrow<Self::Key> + Sync>(
         &mut self,
         key: &Q,
     ) -> CacheBrownsResult<Option<(Self::Key, Self::Value)>>;
@@ -142,14 +190,14 @@ pub trait Store {
 
     /// Remove all values from the cache. This may partially fail. The store *must* attempt to
     /// delete all elements, it may not early exit after encountering a failure.
-    fn flush(&mut self) -> Self::FlushResultIterator;
+    async fn flush(&mut self) -> Self::FlushResultIterator;
 
     /// An iterator of arbitrary order over the keys held in the [`Store`], by reference.
-    fn keys(&self) -> Self::KeyRefIterator<'_>;
+    async fn keys(&self) -> Self::KeyRefIterator<'_>;
 
     /// Checks if the key is in the store. This is a momentary check that may be invalidated; not
     /// thread safe. It is the responsibility of the owning layer to maintain concurrency safety.
-    fn contains<Q: Borrow<Self::Key>>(&self, key: &Q) -> bool;
+    async fn contains<Q: Borrow<Self::Key> + Sync>(&self, key: &Q) -> bool;
 }
 
 #[cfg(test)]
@@ -162,7 +210,7 @@ pub mod test_helpers {
 
     #[automock]
     impl Store {
-        pub fn get<'a>(&self, _key: &i32) -> Option<Cow<'a, i32>> {
+        pub async fn get<'a>(&self, _key: &i32) -> Option<Cow<'a, i32>> {
             unimplemented!()
         }
 
@@ -224,49 +272,49 @@ pub mod test_helpers {
 
         type FlushResultIterator = vec::IntoIter<CacheBrownsResult<Self::Key>>;
 
-        fn get<Q: Borrow<Self::Key>>(&self, key: &Q) -> Option<Cow<Self::Value>> {
-            self.inner.get(key.borrow())
+        async fn get<Q: Borrow<Self::Key> + Sync>(&self, key: &Q) -> Option<Cow<Self::Value>> {
+            self.inner.get(key.borrow()).await
         }
 
-        fn poke<Q: Borrow<Self::Key>>(&self, key: &Q) {
+        async fn poke<Q: Borrow<Self::Key> + Sync>(&self, key: &Q) {
             self.inner.poke(key.borrow());
         }
 
-        fn peek<Q: Borrow<Self::Key>>(&self, key: &Q) -> Option<Cow<Self::Value>> {
+        async fn peek<Q: Borrow<Self::Key> + Sync>(&self, key: &Q) -> Option<Cow<Self::Value>> {
             self.inner.peek(key.borrow())
         }
 
-        fn put(&mut self, key: Self::Key, value: Self::Value) -> CacheBrownsResult<()> {
+        async fn put(&mut self, key: Self::Key, value: Self::Value) -> CacheBrownsResult<()> {
             self.inner.put(key, value)
         }
 
-        fn update(&mut self, key: Self::Key, value: Self::Value) -> CacheBrownsResult<()> {
+        async fn update(&mut self, key: Self::Key, value: Self::Value) -> CacheBrownsResult<()> {
             self.inner.update(key, value)
         }
 
-        fn delete<Q: Borrow<Self::Key>>(
+        async fn delete<Q: Borrow<Self::Key> + Sync>(
             &mut self,
             key: &Q,
         ) -> CacheBrownsResult<Option<Self::Key>> {
             self.inner.delete(key.borrow())
         }
 
-        fn take<Q: Borrow<Self::Key>>(
+        async fn take<Q: Borrow<Self::Key> + Sync>(
             &mut self,
             key: &Q,
         ) -> CacheBrownsResult<Option<(Self::Key, Self::Value)>> {
             self.inner.take(key.borrow())
         }
 
-        fn flush(&mut self) -> Self::FlushResultIterator {
+        async fn flush(&mut self) -> Self::FlushResultIterator {
             self.inner.flush()
         }
 
-        fn keys(&self) -> Self::KeyRefIterator<'_> {
+        async fn keys(&self) -> Self::KeyRefIterator<'_> {
             self.inner.keys()
         }
 
-        fn contains<Q: Borrow<Self::Key>>(&self, key: &Q) -> bool {
+        async fn contains<Q: Borrow<Self::Key> + Sync>(&self, key: &Q) -> bool {
             self.inner.contains(key.borrow())
         }
     }

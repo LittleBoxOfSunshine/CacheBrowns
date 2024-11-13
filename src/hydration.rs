@@ -4,6 +4,7 @@ use std::borrow::Borrow;
 pub mod polling;
 pub mod pull;
 
+#[trait_variant::make(Send)]
 pub trait Hydrator {
     type Key;
     type Value: Clone;
@@ -21,11 +22,14 @@ pub trait Hydrator {
     // users hold references means they're exposed to a more complicated borrow checker interaction.
     // Is it already the case in some other respect though? Is the ref based version and more
     // cumbersome than any existing instances?
-    fn get<Q: Borrow<Self::Key>>(&mut self, key: &Q) -> Option<CacheLookupSuccess<Self::Value>>;
+    async fn get<Q: Borrow<Self::Key> + Sync>(
+        &mut self,
+        key: &Q,
+    ) -> Option<CacheLookupSuccess<Self::Value>>;
 
-    fn flush(&mut self) -> Self::FlushResultIterator;
+    async fn flush(&mut self) -> Self::FlushResultIterator;
 
-    fn stop_tracking(&mut self, key: &Self::Key) -> CacheBrownsResult<()>;
+    async fn stop_tracking<Q: Borrow<Self::Key> + Sync>(&mut self, key: &Q) -> CacheBrownsResult<()>;
 }
 
 #[derive(Debug, Eq, PartialEq)]

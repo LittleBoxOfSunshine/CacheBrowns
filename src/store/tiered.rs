@@ -1,7 +1,7 @@
 use crate::store::Store;
 use crate::CacheBrownsResult;
 use std::borrow::{Borrow, Cow};
-use std::cell::RefCell;
+use tokio::sync::RwLock;
 /*
 Tiered works with ripple propagation
 So, if you want an LRU 2 tier (for scenario where you really just
@@ -50,8 +50,8 @@ pub enum RippleMode {
 /// leads the value to be evicted. Now, the next read of the value will be exposed to the prior
 /// state still held in `T2` effectively "rolling back" the data.
 pub struct TieredStore<Tier, Next> {
-    inner: RefCell<Tier>,
-    next: RefCell<Next>,
+    inner: RwLock<Tier>,
+    next: RwLock<Next>,
     ripple_mode: RippleMode,
 }
 
@@ -62,9 +62,9 @@ where
     Tier: Store<Key = K, Value = V>,
     Next: Store<Key = K, Value = V>,
 {
-    fn inner_put(next: &mut Next, inner: &mut Tier, key: K, value: V) -> CacheBrownsResult<()> {
-        next.put(key.clone(), value.clone())?;
-        inner.put(key, value)
+    async fn inner_put(next: &mut Next, inner: &mut Tier, key: K, value: V) -> CacheBrownsResult<()> {
+        next.put(key.clone(), value.clone()).await?;
+        inner.put(key, value).await
     }
 }
 
@@ -74,8 +74,8 @@ where
 {
     pub fn new(ripple_mode: RippleMode, tier: Tier) -> Self {
         Self {
-            inner: RefCell::new(()),
-            next: RefCell::new(tier),
+            inner: RwLock::new(()),
+            next: RwLock::new(tier),
             ripple_mode,
         }
     }
@@ -86,9 +86,9 @@ where
     {
         TieredStore {
             inner: self.inner,
-            next: RefCell::new(TieredStore {
+            next: RwLock::new(TieredStore {
                 inner: self.next,
-                next: RefCell::new(next),
+                next: RwLock::new(next),
                 ripple_mode: self.ripple_mode.clone(),
             }),
             ripple_mode: self.ripple_mode,
@@ -98,9 +98,9 @@ where
 
 impl<K, Tier, Next> Store for TieredStore<Tier, Next>
 where
-    K: Clone,
-    Tier: Store<Key = K, Value = Next::Value>,
-    Next: Store<Key = K>,
+    K: Clone + Send + Sync,
+    Tier: Store<Key = K, Value = Next::Value> + Sync,
+    Next: Store<Key = K> + Sync,
 {
     type Key = Tier::Key;
     type Value = Tier::Value;
@@ -110,9 +110,9 @@ where
         <Tier as Store>::FlushResultIterator,
     >;
 
-    fn get<Q: Borrow<Self::Key>>(&self, key: &Q) -> Option<Cow<Self::Value>> {
-        let borrow = self.inner.as_ptr();
-        let current_tier_value = unsafe { (*borrow).get(key) };
+    async fn get<Q: Borrow<Self::Key> + Sync>(&self, key: &Q) -> Option<Cow<Self::Value>> {
+        let lock = self.inner.read().await;
+        let current_tier_value = lock.get(key).await;
 
         // Walk down tiers until value is found.
         match current_tier_value {
@@ -121,22 +121,28 @@ where
                 // apply the appropriate ripple mode effects first.
                 match self.ripple_mode {
                     RippleMode::Unified => {
-                        self.next.borrow().poke(key);
+                        self.next.read().await.poke(key).await;
+                        let value = value.to_owned();
                         Some(value)
                     }
-                    RippleMode::ShortCircuit => Some(value),
+                    RippleMode::ShortCircuit => {
+                        let value2 = value.to_owned();
+                        Some(value2)
+                    },
                 }
             }
             None => {
-                match unsafe { (*self.inner.as_ptr()).get(key) } {
+                match self.inner.read().await.get(key).await {
                     None => None,
                     Some(value) => {
                         // Best effort, there is no correctness issue we're just attempting to use
                         // the higher cache tier (i.e. self) for future reads.
                         let _ = self
                             .inner
-                            .borrow_mut()
+                            .write()
+                            .await
                             .put(key.borrow().clone(), value.clone().into_owned());
+                        let value = value.to_owned();
                         Some(value)
                     }
                 }
@@ -144,50 +150,53 @@ where
         }
     }
 
-    fn poke<Q: Borrow<Self::Key>>(&self, key: &Q) {
-        self.next.borrow().poke(key);
-        self.inner.borrow().poke(key);
+    async fn poke<Q: Borrow<Self::Key> + Sync>(&self, key: &Q) {
+        self.next.read().await.poke(key);
+        self.inner.read().await.poke(key);
     }
 
-    fn peek<Q: Borrow<Self::Key>>(&self, key: &Q) -> Option<Cow<Self::Value>> {
+    async fn peek<Q: Borrow<Self::Key> + Sync>(&self, key: &Q) -> Option<Cow<Self::Value>> {
         // We want to exit on the cheapest value, as it will match all the way down.
         // No side effects exist to consider, so no propagation is needed.
-        match unsafe { (*self.inner.as_ptr()).peek(key) } {
-            None => unsafe { (*self.next.as_ptr()).peek(key) },
+        match self.inner.read().await.peek(key).await {
+            None => self.next.read().await.peek(key).await,
             Some(value) => Some(value),
         }
     }
 
-    fn put(&mut self, key: Self::Key, value: Self::Value) -> CacheBrownsResult<()> {
+    async fn put(&mut self, key: Self::Key, value: Self::Value) -> CacheBrownsResult<()> {
         Self::inner_put(
-            &mut *self.next.borrow_mut(),
-            &mut *self.inner.borrow_mut(),
+            &mut *self.next.write().await,
+            &mut *self.inner.write().await,
             key,
             value,
         )
     }
 
-    fn update(&mut self, key: Self::Key, value: Self::Value) -> CacheBrownsResult<()> {
-        self.next.borrow_mut().update(key.clone(), value.clone())?;
-        self.inner.borrow_mut().update(key, value)
+    async fn update(&mut self, key: Self::Key, value: Self::Value) -> CacheBrownsResult<()> {
+        self.next.write().await.update(key.clone(), value.clone()).await?;
+        self.inner.write().await.update(key, value).await
     }
 
-    fn delete<Q: Borrow<Self::Key>>(&mut self, key: &Q) -> CacheBrownsResult<Option<Self::Key>> {
-        self.next.borrow_mut().delete(key)?;
-        self.inner.borrow_mut().delete(key)
+    async fn delete<Q: Borrow<Self::Key> + Sync>(
+        &mut self,
+        key: &Q,
+    ) -> CacheBrownsResult<Option<Self::Key>> {
+        self.next.write().await.delete(key).await?;
+        self.inner.write().await.delete(key).await
     }
 
-    fn take<Q: Borrow<Self::Key>>(
+    async fn take<Q: Borrow<Self::Key> + Sync>(
         &mut self,
         key: &Q,
     ) -> CacheBrownsResult<Option<(Self::Key, Self::Value)>> {
         // Delete needs to succeed or fail at base to avoid rollbacks
-        match self.next.borrow_mut().take(key)? {
+        match self.next.write().await.take(key).await? {
             // No failure, but not present. May be present here, so try take.
-            None => self.inner.borrow_mut().take(key),
+            None => self.inner.write().await.take(key).await,
             // Attempt to cascade up the stack, we already have value so use cheaper delete
             Some(lower_value) => {
-                match self.inner.borrow_mut().delete(key) {
+                match self.inner.write().await.delete(key) {
                     Ok(_) => Ok(Some(lower_value)),
                     // We have a value, but we need to ensure higher tiers don't attempt deletes to
                     // prevent rollbacks
@@ -198,73 +207,79 @@ where
         }
     }
 
-    fn flush(&mut self) -> Self::FlushResultIterator {
-        let low_tiers = self.next.borrow_mut().flush();
-        let flushed_here = self.inner.borrow_mut().flush();
+    async fn flush(&mut self) -> Self::FlushResultIterator {
+        let low_tiers = self.next.write().await.flush();
+        let flushed_here = self.inner.write().await.flush();
         low_tiers.chain(flushed_here)
     }
 
-    fn keys(&self) -> Self::KeyRefIterator<'_> {
+    async fn keys(&self) -> Self::KeyRefIterator<'_> {
         // From an external perspective, store is a monolith. Propagate to lowest (biggest) tier.
-        unsafe { (*self.next.as_ptr()).keys() }
+        unsafe { (*self.next.read().await).keys().await }
     }
 
-    fn contains<Q: Borrow<Self::Key>>(&self, key: &Q) -> bool {
+    async fn contains<Q: Borrow<Self::Key> + Sync>(&self, key: &Q) -> bool {
         // From an external perspective, store is a monolith. Propagate to lowest (biggest) tier.
-        self.next.borrow().contains(key)
+        self.next.read().await.contains(key).await
     }
 }
 
 impl<Tier> Store for TieredStore<(), Tier>
 where
-    Tier: Store,
+    Tier: Store + Sync,
 {
     type Key = Tier::Key;
     type Value = Tier::Value;
-    type KeyRefIterator<'k> = Tier::KeyRefIterator<'k> where <Tier as Store>::Key: 'k, Self: 'k;
+    type KeyRefIterator<'k> = std::slice::Iter<'k, &'k <Tier as Store>::Key> where <Tier as Store>::Key: 'k, Self: 'k;
     type FlushResultIterator = Tier::FlushResultIterator;
 
-    fn get<Q: Borrow<Self::Key>>(&self, key: &Q) -> Option<Cow<Self::Value>> {
-        unsafe { (*self.next.as_ptr()).get(key) }
+    async fn get<Q: Borrow<Self::Key> + Sync>(&self, key: &Q) -> Option<Cow<Self::Value>> {
+        let lock = self.next.read().await;
+        lock.get(key).await.to_owned()
     }
 
-    fn poke<Q: Borrow<Self::Key>>(&self, key: &Q) {
-        unsafe { (*self.next.as_ptr()).poke(key) }
+    async fn poke<Q: Borrow<Self::Key> + Sync>(&self, key: &Q) {
+        unsafe { (*self.next.read().await).poke(key).await }
     }
 
-    fn peek<Q: Borrow<Self::Key>>(&self, key: &Q) -> Option<Cow<Self::Value>> {
-        unsafe { (*self.next.as_ptr()).peek(key) }
+    async fn peek<Q: Borrow<Self::Key> + Sync>(&self, key: &Q) -> Option<Cow<Self::Value>> {
+        unsafe { (*self.next.read().await).peek(key).await }
     }
 
-    fn put(&mut self, key: Self::Key, value: Self::Value) -> CacheBrownsResult<()> {
-        self.next.borrow_mut().put(key, value)
+    async fn put(&mut self, key: Self::Key, value: Self::Value) -> CacheBrownsResult<()> {
+        self.next.write().await.put(key, value).await
     }
 
-    fn update(&mut self, key: Self::Key, value: Self::Value) -> CacheBrownsResult<()> {
-        self.next.borrow_mut().update(key, value)
+    async fn update(&mut self, key: Self::Key, value: Self::Value) -> CacheBrownsResult<()> {
+        self.next.write().await.update(key, value).await
     }
 
-    fn delete<Q: Borrow<Self::Key>>(&mut self, key: &Q) -> CacheBrownsResult<Option<Self::Key>> {
-        self.next.borrow_mut().delete(key)
+    async fn delete<Q: Borrow<Self::Key> + Sync>(
+        &mut self,
+        key: &Q,
+    ) -> CacheBrownsResult<Option<Self::Key>> {
+        self.next.write().await.delete(key).await
     }
 
-    fn take<Q: Borrow<Self::Key>>(
+    async fn take<Q: Borrow<Self::Key> + Sync>(
         &mut self,
         key: &Q,
     ) -> CacheBrownsResult<Option<(Self::Key, Self::Value)>> {
-        self.next.borrow_mut().take(key)
+        self.next.write().await.take(key).await
     }
 
-    fn flush(&mut self) -> Self::FlushResultIterator {
-        self.next.borrow_mut().flush()
+    async fn flush(&mut self) -> Self::FlushResultIterator {
+        self.next.write().await.flush().await
     }
 
-    fn keys(&self) -> Self::KeyRefIterator<'_> {
-        unsafe { (*self.next.as_ptr()).keys() }
+    async fn keys(&self) -> Self::KeyRefIterator<'_> {
+        let next = self.next.read().await;
+        let keys = next.keys().await;
+        keys.collect::<Vec<&'_ Self::Key>>().iter()
     }
 
-    fn contains<Q: Borrow<Self::Key>>(&self, key: &Q) -> bool {
-        self.next.borrow().contains(key)
+    async fn contains<Q: Borrow<Self::Key> + Sync>(&self, key: &Q) -> bool {
+        self.next.read().await.contains(key).await
     }
 }
 
@@ -276,54 +291,54 @@ mod tests {
     use crate::store::tiered::{RippleMode, TieredStore};
     use crate::store::Store;
 
-    #[test]
-    fn happy_path() {
+    #[tokio::test]
+    async fn happy_path() {
         let mut store =
             TieredStore::new(RippleMode::ShortCircuit, MemoryStore::new()).tier(MemoryStore::new());
 
-        assert!(store.put(0, 0).is_ok());
-        assert_eq!(0, *store.get(&0).unwrap())
+        assert!(store.put(0, 0).await.is_ok());
+        assert_eq!(0, *store.get(&0).await.unwrap())
     }
 
-    #[test]
-    fn unified_cache_side_effects_propagate() {}
+    #[tokio::test]
+    async fn unified_cache_side_effects_propagate() {}
 
-    #[test]
-    fn short_circuit_cache_side_effects_do_not_propagate() {}
+    #[tokio::test]
+    async fn short_circuit_cache_side_effects_do_not_propagate() {}
 
-    #[test]
-    fn get_from_lower_tier() {}
+    #[tokio::test]
+    async fn get_from_lower_tier() {}
 
-    #[test]
-    fn get_from_lower_tier_repeats_due_to_upper_tier_insert_failure() {}
+    #[tokio::test]
+    async fn get_from_lower_tier_repeats_due_to_upper_tier_insert_failure() {}
 
-    #[test]
-    fn poke_always_propagates() {}
+    #[tokio::test]
+    async fn poke_always_propagates() {}
 
-    #[test]
-    fn flush_with_mixed_failures() {}
+    #[tokio::test]
+    async fn flush_with_mixed_failures() {}
 
-    #[test]
-    fn flush_happy_path() {}
+    #[tokio::test]
+    async fn flush_happy_path() {}
 
-    #[test]
-    fn update_cascades() {}
+    #[tokio::test]
+    async fn update_cascades() {}
 
-    #[test]
-    fn update_lower_tier_fails() {}
+    #[tokio::test]
+    async fn update_lower_tier_fails() {}
 
-    #[test]
-    fn update_upper_tier_fails_then_evicts_no_rollbacks_occur() {}
+    #[tokio::test]
+    async fn update_upper_tier_fails_then_evicts_no_rollbacks_occur() {}
 
-    #[test]
-    fn take_propagates_delete() {}
+    #[tokio::test]
+    async fn take_propagates_delete() {}
 
-    #[test]
-    fn keys_merges_all_layers() {}
+    #[tokio::test]
+    async fn keys_merges_all_layers() {}
 
-    #[test]
-    fn contains_cascades() {}
+    #[tokio::test]
+    async fn contains_cascades() {}
 
-    #[test]
-    fn contains_early_exit() {}
+    #[tokio::test]
+    async fn contains_early_exit() {}
 }

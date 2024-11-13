@@ -10,16 +10,16 @@ use std::borrow::Borrow;
 ///
 /// It is the key trait for decoupling the application logic from the general purpose strategy
 /// implementations. Implementations can be composed to reuse and customize common implementations.
-pub trait SourceOfRecord {
+pub trait SourceOfRecord: Send + Sync {
     type Key;
     type Value;
 
     /// Fetch the data from the source of record. This may or may not be a remote call.
-    fn retrieve<Q: Borrow<Self::Key>>(&self, key: &Q) -> Option<Self::Value>;
+    fn retrieve<Q: Borrow<Self::Key> + Sync>(&self, key: &Q) -> Option<Self::Value>;
 
     /// Accepts current value if one exists in case it can be used for optimized load
     /// ex. If building an HTTP cache, and you receive a 304 response, replay the current value
-    fn retrieve_with_hint<Q: Borrow<Self::Key>, V: Borrow<Self::Value>>(
+    fn retrieve_with_hint<Q: Borrow<Self::Key> + Sync, V: Borrow<Self::Value>>(
         &self,
         key: &Q,
         _current_value: &V,
@@ -109,11 +109,11 @@ pub mod test_helpers {
         type Key = i32;
         type Value = i32;
 
-        fn retrieve<Q: Borrow<Self::Key>>(&self, key: &Q) -> Option<Self::Value> {
+        fn retrieve<Q: Borrow<Self::Key> + Sync>(&self, key: &Q) -> Option<Self::Value> {
             self.inner.retrieve(key.borrow())
         }
 
-        fn retrieve_with_hint<Q: Borrow<Self::Key>, V: Borrow<Self::Value>>(
+        fn retrieve_with_hint<Q: Borrow<Self::Key> + Sync, V: Borrow<Self::Value>>(
             &self,
             key: &Q,
             value: &V,

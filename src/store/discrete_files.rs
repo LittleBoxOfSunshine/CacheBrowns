@@ -1,3 +1,5 @@
+use itertools::Itertools;
+use serde::{Deserialize, Serialize};
 use std::borrow::{Borrow, Cow};
 use std::collections::hash_map::Drain;
 use std::collections::{hash_map, HashMap};
@@ -7,9 +9,6 @@ use std::hash::Hash;
 use std::io::{BufReader, BufWriter, Error, ErrorKind};
 use std::path::{Path, PathBuf};
 use std::{fs, vec};
-
-use itertools::Itertools;
-use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 // TODO: Support the notion of versioning?
@@ -47,7 +46,7 @@ impl<Key, Value, Serde> DiscreteFileStoreNonVolatile<Key, Record<Key, Value>, Se
 where
     Key: Clone + Eq + Hash + Serialize + for<'a> Deserialize<'a> + Debug,
     Value: Clone + Serialize + for<'a> Deserialize<'a>,
-    Serde: DiscreteFileSerializerDeserializer<Record<Key, Value>>,
+    Serde: DiscreteFileSerializerDeserializer<Record<Key, Value>> + Send,
 {
     pub fn new<P: Into<PathBuf>>(
         cache_directory: P,
@@ -92,22 +91,22 @@ where
 
 impl<Key, Value, Serde> Store for DiscreteFileStoreNonVolatile<Key, Record<Key, Value>, Serde>
 where
-    Key: Clone + Eq + Hash + Serialize + for<'a> Deserialize<'a> + Debug,
-    Value: Clone + Serialize + for<'a> Deserialize<'a>,
-    Serde: DiscreteFileSerializerDeserializer<Record<Key, Value>>,
+    Key: Clone + Eq + Hash + Serialize + for<'a> Deserialize<'a> + Debug + Send + Sync,
+    Value: Clone + Serialize + for<'a> Deserialize<'a> + Send + Sync,
+    Serde: DiscreteFileSerializerDeserializer<Record<Key, Value>> + Send + Sync,
 {
     type Key = Key;
     type Value = Value;
     type KeyRefIterator<'k> = hash_map::Keys<'k, Key, PathBuf> where Key: 'k, Value: 'k, Serde: 'k;
     type FlushResultIterator = vec::IntoIter<CacheBrownsResult<Key>>;
 
-    fn get<Q: Borrow<Key>>(&self, key: &Q) -> Option<Cow<Value>> {
-        self.peek(key)
+    async fn get<Q: Borrow<Key> + Sync>(&self, key: &Q) -> Option<Cow<Self::Value>> {
+        self.peek(key).await
     }
 
-    fn poke<Q: Borrow<Self::Key>>(&self, _key: &Q) {}
+    async fn poke<Q: Borrow<Self::Key> + Sync>(&self, _key: &Q) {}
 
-    fn peek<Q: Borrow<Key>>(&self, key: &Q) -> Option<Cow<Value>> {
+    async fn peek<Q: Borrow<Key> + Sync>(&self, key: &Q) -> Option<Cow<Value>> {
         if let Some(path) = self.index.get(key.borrow()) {
             return Some(Cow::Owned(get::<Serde, Record<Key, Value>>(path)?.value));
         }
@@ -115,24 +114,24 @@ where
         None
     }
 
-    fn put(&mut self, key: Self::Key, value: Self::Value) -> CacheBrownsResult<()> {
+    async fn put(&mut self, key: Self::Key, value: Self::Value) -> CacheBrownsResult<()> {
         let path = get_or_create_index_entry(&self.cache_directory, &mut self.index, key.clone());
         put::<Serde, Record<Key, Value>>(path, Record { key, value })
     }
 
-    fn update(&mut self, key: Self::Key, value: Self::Value) -> CacheBrownsResult<()> {
-        if self.contains(&key) {
-            return self.put(key, value);
+    async fn update(&mut self, key: Self::Key, value: Self::Value) -> CacheBrownsResult<()> {
+        if self.contains(&key).await {
+            return self.put(key, value).await;
         }
 
         Ok(())
     }
 
-    fn delete<Q: Borrow<Self::Key>>(&mut self, key: &Q) -> CacheBrownsResult<Option<Key>> {
+    async fn delete<Q: Borrow<Self::Key> + Sync>(&mut self, key: &Q) -> CacheBrownsResult<Option<Key>> {
         delete::<Key>(&mut self.index, key.borrow())
     }
 
-    fn take<Q: Borrow<Self::Key>>(
+    async fn take<Q: Borrow<Self::Key> + Sync>(
         &mut self,
         key: &Q,
     ) -> CacheBrownsResult<Option<(Self::Key, Self::Value)>> {
@@ -151,16 +150,16 @@ where
         // }
     }
 
-    fn flush(&mut self) -> Self::FlushResultIterator {
+    async fn flush(&mut self) -> Self::FlushResultIterator {
         flush::<Key>(self.index.drain())
     }
 
     //noinspection DuplicatedCode
-    fn keys(&self) -> Self::KeyRefIterator<'_> {
+    async fn keys(&self) -> Self::KeyRefIterator<'_> {
         self.index.keys()
     }
 
-    fn contains<Q: Borrow<Self::Key>>(&self, key: &Q) -> bool {
+    async fn contains<Q: Borrow<Self::Key> + Sync>(&self, key: &Q) -> bool {
         self.index.contains_key(key.borrow())
     }
 }
@@ -228,22 +227,22 @@ where
 
 impl<Key, Value, Serde> Store for DiscreteFileStoreVolatile<Key, Value, Serde>
 where
-    Key: Clone + Eq + Hash + Serialize + for<'a> Deserialize<'a> + Debug,
-    Value: Clone + Serialize + for<'a> Deserialize<'a>,
-    Serde: DiscreteFileSerializerDeserializer<Value>,
+    Key: Clone + Eq + Hash + Serialize + for<'a> Deserialize<'a> + Debug + Send + Sync,
+    Value: Clone + Serialize + for<'a> Deserialize<'a> + Send + Sync,
+    Serde: DiscreteFileSerializerDeserializer<Value> + Send + Sync,
 {
     type Key = Key;
     type Value = Value;
     type KeyRefIterator<'k> = hash_map::Keys<'k, Key, PathBuf> where Key: 'k, Value: 'k, Serde: 'k;
     type FlushResultIterator = vec::IntoIter<CacheBrownsResult<Key>>;
 
-    fn get<Q: Borrow<Key>>(&self, key: &Q) -> Option<Cow<Value>> {
-        self.peek(key)
+    async fn get<Q: Borrow<Key> + Sync>(&self, key: &Q) -> Option<Cow<Self::Value>> {
+        self.peek(key).await
     }
 
-    fn poke<Q: Borrow<Self::Key>>(&self, _key: &Q) {}
+    async fn poke<Q: Borrow<Self::Key> + Sync>(&self, _key: &Q) {}
 
-    fn peek<Q: Borrow<Key>>(&self, key: &Q) -> Option<Cow<Value>> {
+    async fn peek<Q: Borrow<Key> + Sync>(&self, key: &Q) -> Option<Cow<Value>> {
         if let Some(path) = self.index.get(key.borrow()) {
             return get::<Serde, Value>(path).map(|v| Cow::Owned(v));
         }
@@ -251,7 +250,7 @@ where
         None
     }
 
-    fn put(&mut self, key: Self::Key, value: Self::Value) -> CacheBrownsResult<()> {
+    async fn put(&mut self, key: Self::Key, value: Self::Value) -> CacheBrownsResult<()> {
         let path = get_or_create_index_entry(&self.cache_directory, &mut self.index, key);
         put::<Serde, Value>(path, value)
     }
@@ -264,11 +263,11 @@ where
         Ok(())
     }
 
-    fn delete<Q: Borrow<Self::Key>>(&mut self, key: &Q) -> CacheBrownsResult<Option<Key>> {
+    async fn delete<Q: Borrow<Self::Key> + Sync>(&mut self, key: &Q) -> CacheBrownsResult<Option<Key>> {
         delete::<Key>(&mut self.index, key.borrow())
     }
 
-    fn take<Q: Borrow<Self::Key>>(
+    async fn take<Q: Borrow<Self::Key> + Sync>(
         &mut self,
         key: &Q,
     ) -> CacheBrownsResult<Option<(Self::Key, Self::Value)>> {
@@ -282,15 +281,15 @@ where
         // }
     }
 
-    fn flush(&mut self) -> Self::FlushResultIterator {
+    async fn flush(&mut self) -> Self::FlushResultIterator {
         flush::<Key>(self.index.drain())
     }
 
-    fn keys(&self) -> Self::KeyRefIterator<'_> {
+    async fn keys(&self) -> Self::KeyRefIterator<'_> {
         self.index.keys()
     }
 
-    fn contains<Q: Borrow<Self::Key>>(&self, key: &Q) -> bool {
+    async fn contains<Q: Borrow<Self::Key> + Sync>(&self, key: &Q) -> bool {
         self.index.contains_key(key.borrow())
     }
 }
@@ -299,7 +298,7 @@ where
 fn get<Serde, Value>(path: &PathBuf) -> Option<Value>
 where
     Value: Clone + Serialize + for<'a> Deserialize<'a>,
-    Serde: DiscreteFileSerializerDeserializer<Value>,
+    Serde: DiscreteFileSerializerDeserializer<Value> + Send,
 {
     if let Ok(file) = File::open(path) {
         return Serde::deserialize(BufReader::new(file));
@@ -340,7 +339,7 @@ fn take<Serde, Key, Value>(
 where
     Key: Eq + Hash,
     Value: Clone + Serialize + for<'a> Deserialize<'a>,
-    Serde: DiscreteFileSerializerDeserializer<Value>,
+    Serde: DiscreteFileSerializerDeserializer<Value> + Send,
 {
     // Checking index an extra time is way faster than going to disk.
     if let Some(path) = index.get(key) {
@@ -468,7 +467,8 @@ pub type DiscreteFileStoreVolatileJson<Key, Value> =
 
 #[cfg(test)]
 mod tests {
-    use crate::store::discrete_files::{
+    use std::future::Future;
+use crate::store::discrete_files::{
         DiscreteFileStoreNonVolatile, DiscreteFileStoreNonVolatileJson,
         DiscreteFileStoreVolatileJson, JsonDiscreteFileSerializerDeserializer, Record,
     };
@@ -486,20 +486,20 @@ mod tests {
     const VALID_DATA1: &str = "{\"key\": 42, \"value\": 42}";
     const VALID_DATA2: &str = "{\"key\": 43, \"value\": 42}";
 
-    fn validate_against_volatile<F: Fn(&mut DiscreteFileStoreVolatileJson<u32, u32>, &TempDir)>(
+    async fn validate_against_volatile<F: Future<Output = Fn(&mut DiscreteFileStoreVolatileJson<u32, u32>, &TempDir)>>(
         f: F,
     ) {
         let (mut store, dir) = empty_volatile_store();
-        f(&mut store, &dir);
+        (f.await)(&mut store, &dir);
     }
 
-    fn validate_against_non_volatile<
-        F: Fn(&mut DiscreteFileStoreNonVolatileJson<u32, Record<u32, u32>>, &TempDir),
+    async fn validate_against_non_volatile<
+        F: Future<Output = Fn(&mut DiscreteFileStoreNonVolatileJson<u32, Record<u32, u32>>, &TempDir),>
     >(
         f: F,
     ) {
         let (mut store, dir) = empty_non_volatile_store();
-        f(&mut store, &dir);
+        (f.await)(&mut store, &dir);
     }
 
     macro_rules! flush_clears_dir {
@@ -512,8 +512,8 @@ mod tests {
         };
     }
 
-    #[test]
-    fn flush_clears_dir() {
+    #[tokio::test]
+    async fn flush_clears_dir() {
         validate_against_volatile(|store, dir| {
             flush_clears_dir!(store, dir);
         });
@@ -540,8 +540,8 @@ mod tests {
         };
     }
 
-    #[test]
-    fn contains() {
+    #[tokio::test]
+    async fn contains() {
         validate_against_volatile(|store, _dir| {
             contains!(store);
         });
@@ -552,38 +552,38 @@ mod tests {
 
     macro_rules! get_or_peek {
         ($func: ident, $store: ident) => {
-            assert_eq!(None, $store.get(&42));
+            assert_eq!(None, $store.get(&42).await);
 
             $store.put(42, 42).unwrap();
-            assert_eq!(42, $store.$func(&42).unwrap().into_owned());
-            assert_eq!(None, $store.$func(&45));
+            assert_eq!(42, $store.$func(&42).await.unwrap().into_owned());
+            assert_eq!(None, $store.$func(&45).await);
 
             $store.put(45, 42).unwrap();
-            assert_eq!(42, $store.$func(&42).unwrap().into_owned());
-            assert_eq!(42, $store.$func(&45).unwrap().into_owned());
+            assert_eq!(42, $store.$func(&42).await.unwrap().into_owned());
+            assert_eq!(42, $store.$func(&45).await.unwrap().into_owned());
 
             $store.put(42, 55).unwrap();
-            assert_eq!(55, $store.$func(&42).unwrap().into_owned());
-            assert_eq!(42, $store.$func(&45).unwrap().into_owned());
+            assert_eq!(55, $store.$func(&42).await.unwrap().into_owned());
+            assert_eq!(42, $store.$func(&45).await.unwrap().into_owned());
         };
     }
 
-    #[test]
-    fn get() {
-        validate_against_volatile(|store, _dir| {
+    #[tokio::test]
+    async fn get() {
+        validate_against_volatile(|store, _dir| async {
             get_or_peek!(get, store);
         });
-        validate_against_non_volatile(|store, _dir| {
+        validate_against_non_volatile(|store, _dir| async {
             get_or_peek!(get, store);
         });
     }
 
-    #[test]
-    fn peek() {
-        validate_against_volatile(|store, _dir| {
+    #[tokio::test]
+    async fn peek() {
+        validate_against_volatile(|store, _dir| async {
             get_or_peek!(peek, store);
         });
-        validate_against_non_volatile(|store, _dir| {
+        validate_against_non_volatile(|store, _dir| async {
             get_or_peek!(peek, store);
         });
     }
@@ -606,8 +606,8 @@ mod tests {
         };
     }
 
-    #[test]
-    fn keys() {
+    #[tokio::test]
+    async fn keys() {
         validate_against_volatile(|store, _dir| {
             keys!(store);
         });
@@ -634,8 +634,8 @@ mod tests {
         };
     }
 
-    #[test]
-    fn delete() {
+    #[tokio::test]
+    async fn delete() {
         validate_against_volatile(|store, _dir| {
             delete!(store);
         });
@@ -644,18 +644,18 @@ mod tests {
         });
     }
 
-    #[test]
-    fn volatile_store_clears_pre_existing_data() {
+    #[tokio::test]
+    async fn volatile_store_clears_pre_existing_data() {
         let (store, _dir) = create_volatile_scenario().unwrap();
-        assert_eq!(0, store.keys().count());
+        assert_eq!(0, store.keys().await.count());
     }
 
-    #[test]
-    fn volatile_store_clears_clears_data_on_clean_exit() {
+    #[tokio::test]
+    async fn volatile_store_clears_clears_data_on_clean_exit() {
         let (mut store, dir) = create_volatile_scenario().unwrap();
-        store.put(45, 45).unwrap();
+        store.put(45, 45).await.unwrap();
 
-        assert_eq!(1, store.keys().count());
+        assert_eq!(1, store.keys().await.count());
         assert_eq!(1, std::fs::read_dir(dir.path()).unwrap().count());
         assert!(std::fs::metadata(dir.path()).unwrap().is_dir());
 
@@ -664,27 +664,30 @@ mod tests {
         assert!(std::fs::metadata(dir.path()).is_err_and(|e| e.kind() == ErrorKind::NotFound));
     }
 
-    #[test]
-    fn non_volatile_rehydrates() {
+    #[tokio::test]
+    async fn non_volatile_rehydrates() {
         let (store, _dir) = create_non_volatile_scenario(true).unwrap();
-        assert!(store.0.contains(&VALID_DATA1_KEY));
+        assert!(store.0.contains(&VALID_DATA1_KEY).await);
         assert_eq!(
             VALID_DATA1_KEY,
-            store.0.get(&VALID_DATA1_KEY).unwrap().into_owned()
+            store.0.get(&VALID_DATA1_KEY).await.unwrap().into_owned()
         );
-        assert!(store.0.contains(&VALID_DATA2_KEY));
-        assert_eq!(42, store.0.get(&VALID_DATA2_KEY).unwrap().into_owned());
+        assert!(store.0.contains(&VALID_DATA2_KEY).await);
+        assert_eq!(
+            42,
+            store.0.get(&VALID_DATA2_KEY).await.unwrap().into_owned()
+        );
     }
 
-    #[test]
-    fn non_volatile_rehydrate_corrupt_data_dropped() {
+    #[tokio::test]
+    async fn non_volatile_rehydrate_corrupt_data_dropped() {
         let (store, _dir) = create_non_volatile_scenario(false).unwrap();
-        assert!(store.0.contains(&VALID_DATA1_KEY));
+        assert!(store.0.contains(&VALID_DATA1_KEY).await);
         assert_eq!(
             VALID_DATA1_KEY,
-            store.0.get(&VALID_DATA1_KEY).unwrap().into_owned()
+            store.0.get(&VALID_DATA1_KEY).await.unwrap().into_owned()
         );
-        assert!(!store.0.contains(&VALID_DATA2_KEY));
+        assert!(!store.0.contains(&VALID_DATA2_KEY).await);
     }
 
     #[allow(clippy::type_complexity)]
@@ -704,22 +707,22 @@ mod tests {
         DiscreteFileStoreNonVolatileJson::new(dir.path())
     }
 
-    #[test]
-    fn non_volatile_rehydrate_duplicate_key_err() {
+    #[tokio::test]
+    async fn non_volatile_rehydrate_duplicate_key_err() {
         let dir = create_with_valid_file();
         create_valid_data_1_in_dir(&dir, "z");
         assert!(non_volatile_from_path(&dir).is_err());
     }
 
-    #[test]
-    fn non_volatile_rehydrate_from_empty() {
+    #[tokio::test]
+    async fn non_volatile_rehydrate_from_empty() {
         let dir = TempDir::new("test").unwrap();
         let store = non_volatile_from_path(&dir).unwrap().0;
-        assert_eq!(0, store.keys().count());
+        assert_eq!(0, store.keys().await.count());
     }
 
-    #[test]
-    fn serialize_deserialize_struct_happy_path() {
+    #[tokio::test]
+    async fn serialize_deserialize_struct_happy_path() {
         #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
         struct Bar {
             foo: i32,
@@ -737,9 +740,9 @@ mod tests {
 
         let dir = TempDir::new("test").unwrap();
         let mut store = DiscreteFileStoreVolatileJson::new(dir.path()).unwrap();
-        store.put(32, foo.clone()).unwrap();
+        store.put(32, foo.clone()).await.unwrap();
 
-        assert_eq!(foo, store.get(&32).unwrap().into_owned())
+        assert_eq!(foo, store.get(&32).await.unwrap().into_owned())
     }
 
     fn empty_volatile_store() -> (DiscreteFileStoreVolatileJson<u32, u32>, TempDir) {
