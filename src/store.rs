@@ -1,10 +1,12 @@
 use crate::CacheBrownsResult;
-use std::borrow::{Borrow, Cow};
+use std::borrow::Borrow;
+
+// TODO: Now that the lifetimes are gone, automock should work without all the double structures.s
 
 pub mod discrete_files;
 pub mod memory;
 pub mod replacement;
-pub mod tiered;
+//pub mod tiered;
 
 // TODO: Demonstrate integration with fast external store like: https://crates.io/crates/scc
 // TODO: Add link for blog post
@@ -101,7 +103,7 @@ pub trait Store {
     /// side effects that are appropriate for the semantics of the implementation. For example, if
     /// the store is an LRU, calls to [`Store::get`] must induce the side effect of updating the usage
     /// order.
-    async fn get<Q: Borrow<Self::Key> + Sync>(&self, key: &Q) -> Option<Cow<Self::Value>>;
+    async fn get<Q: Borrow<Self::Key> + Sync>(&self, key: &Q) -> Option<Self::Value>;
 
     /// Complement of [`Store::get`]. A [`Store::poke`] will cause the side effects of a read to occur without
     /// actually reading the data. Fetching unneeded data is wasteful in general, but in some cases
@@ -116,7 +118,7 @@ pub trait Store {
     /// these reads will skew tracking. Peek allows you to inspect state without side effects, it
     /// signals to any layer that a platform read has occurred that should be ignored for usage
     /// tracking purposes.
-    async fn peek<Q: Borrow<Self::Key> + Sync>(&self, key: &Q) -> Option<Cow<Self::Value>>;
+    async fn peek<Q: Borrow<Self::Key> + Sync>(&self, key: &Q) -> Option<Self::Value>;
 
     /// Insert or update the key-value pair in the [`Store`]. This is infallible because the caller
     /// can't do anything useful based on the underlying error coming from an unknown origin and
@@ -210,11 +212,11 @@ pub mod test_helpers {
 
     #[automock]
     impl Store {
-        pub async fn get<'a>(&self, _key: &i32) -> Option<Cow<'a, i32>> {
+        pub async fn get<'a>(&self, _key: &i32) -> Option<i32> {
             unimplemented!()
         }
 
-        pub fn peek<'a>(&self, _key: &i32) -> Option<Cow<'a, i32>> {
+        pub fn peek<'a>(&self, _key: &i32) -> Option<i32> {
             unimplemented!()
         }
 
@@ -265,14 +267,15 @@ pub mod test_helpers {
         type Key = i32;
         type Value = i32;
 
-        type KeyRefIterator<'k> = vec::IntoIter<&'k i32>
-            where
-                <MockStoreWrapper as super::Store>::Key: 'k,
-                Self: 'k;
+        type KeyRefIterator<'k>
+            = vec::IntoIter<&'k i32>
+        where
+            <MockStoreWrapper as super::Store>::Key: 'k,
+            Self: 'k;
 
         type FlushResultIterator = vec::IntoIter<CacheBrownsResult<Self::Key>>;
 
-        async fn get<Q: Borrow<Self::Key> + Sync>(&self, key: &Q) -> Option<Cow<Self::Value>> {
+        async fn get<Q: Borrow<Self::Key> + Sync>(&self, key: &Q) -> Option<Self::Value> {
             self.inner.get(key.borrow()).await
         }
 
@@ -280,7 +283,7 @@ pub mod test_helpers {
             self.inner.poke(key.borrow());
         }
 
-        async fn peek<Q: Borrow<Self::Key> + Sync>(&self, key: &Q) -> Option<Cow<Self::Value>> {
+        async fn peek<Q: Borrow<Self::Key> + Sync>(&self, key: &Q) -> Option<Self::Value> {
             self.inner.peek(key.borrow())
         }
 

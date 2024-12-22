@@ -1,6 +1,6 @@
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
-use std::borrow::{Borrow, Cow};
+use std::borrow::Borrow;
 use std::collections::hash_map::Drain;
 use std::collections::{hash_map, HashMap};
 use std::fmt::Debug;
@@ -97,18 +97,23 @@ where
 {
     type Key = Key;
     type Value = Value;
-    type KeyRefIterator<'k> = hash_map::Keys<'k, Key, PathBuf> where Key: 'k, Value: 'k, Serde: 'k;
+    type KeyRefIterator<'k>
+        = hash_map::Keys<'k, Key, PathBuf>
+    where
+        Key: 'k,
+        Value: 'k,
+        Serde: 'k;
     type FlushResultIterator = vec::IntoIter<CacheBrownsResult<Key>>;
 
-    async fn get<Q: Borrow<Key> + Sync>(&self, key: &Q) -> Option<Cow<Self::Value>> {
+    async fn get<Q: Borrow<Key> + Sync>(&self, key: &Q) -> Option<Self::Value> {
         self.peek(key).await
     }
 
     async fn poke<Q: Borrow<Self::Key> + Sync>(&self, _key: &Q) {}
 
-    async fn peek<Q: Borrow<Key> + Sync>(&self, key: &Q) -> Option<Cow<Value>> {
+    async fn peek<Q: Borrow<Key> + Sync>(&self, key: &Q) -> Option<Value> {
         if let Some(path) = self.index.get(key.borrow()) {
-            return Some(Cow::Owned(get::<Serde, Record<Key, Value>>(path)?.value));
+            return Some(get::<Serde, Record<Key, Value>>(path)?.value);
         }
 
         None
@@ -127,7 +132,10 @@ where
         Ok(())
     }
 
-    async fn delete<Q: Borrow<Self::Key> + Sync>(&mut self, key: &Q) -> CacheBrownsResult<Option<Key>> {
+    async fn delete<Q: Borrow<Self::Key> + Sync>(
+        &mut self,
+        key: &Q,
+    ) -> CacheBrownsResult<Option<Key>> {
         delete::<Key>(&mut self.index, key.borrow())
     }
 
@@ -233,18 +241,23 @@ where
 {
     type Key = Key;
     type Value = Value;
-    type KeyRefIterator<'k> = hash_map::Keys<'k, Key, PathBuf> where Key: 'k, Value: 'k, Serde: 'k;
+    type KeyRefIterator<'k>
+        = hash_map::Keys<'k, Key, PathBuf>
+    where
+        Key: 'k,
+        Value: 'k,
+        Serde: 'k;
     type FlushResultIterator = vec::IntoIter<CacheBrownsResult<Key>>;
 
-    async fn get<Q: Borrow<Key> + Sync>(&self, key: &Q) -> Option<Cow<Self::Value>> {
+    async fn get<Q: Borrow<Key> + Sync>(&self, key: &Q) -> Option<Self::Value> {
         self.peek(key).await
     }
 
     async fn poke<Q: Borrow<Self::Key> + Sync>(&self, _key: &Q) {}
 
-    async fn peek<Q: Borrow<Key> + Sync>(&self, key: &Q) -> Option<Cow<Value>> {
+    async fn peek<Q: Borrow<Key> + Sync>(&self, key: &Q) -> Option<Value> {
         if let Some(path) = self.index.get(key.borrow()) {
-            return get::<Serde, Value>(path).map(|v| Cow::Owned(v));
+            return get::<Serde, Value>(path);
         }
 
         None
@@ -255,15 +268,18 @@ where
         put::<Serde, Value>(path, value)
     }
 
-    fn update(&mut self, key: Self::Key, value: Self::Value) -> CacheBrownsResult<()> {
-        if self.contains(&key) {
-            return self.put(key, value);
+    async fn update(&mut self, key: Self::Key, value: Self::Value) -> CacheBrownsResult<()> {
+        if self.contains(&key).await {
+            return self.put(key, value).await;
         }
 
         Ok(())
     }
 
-    async fn delete<Q: Borrow<Self::Key> + Sync>(&mut self, key: &Q) -> CacheBrownsResult<Option<Key>> {
+    async fn delete<Q: Borrow<Self::Key> + Sync>(
+        &mut self,
+        key: &Q,
+    ) -> CacheBrownsResult<Option<Key>> {
         delete::<Key>(&mut self.index, key.borrow())
     }
 
@@ -467,8 +483,7 @@ pub type DiscreteFileStoreVolatileJson<Key, Value> =
 
 #[cfg(test)]
 mod tests {
-    use std::future::Future;
-use crate::store::discrete_files::{
+    use crate::store::discrete_files::{
         DiscreteFileStoreNonVolatile, DiscreteFileStoreNonVolatileJson,
         DiscreteFileStoreVolatileJson, JsonDiscreteFileSerializerDeserializer, Record,
     };
@@ -477,6 +492,7 @@ use crate::store::discrete_files::{
     use std::collections::BTreeSet;
     use std::fs;
     use std::fs::File;
+    use std::future::Future;
     use std::io::{Error, ErrorKind, Write};
     use std::path::PathBuf;
     use tempdir::TempDir;
@@ -486,120 +502,138 @@ use crate::store::discrete_files::{
     const VALID_DATA1: &str = "{\"key\": 42, \"value\": 42}";
     const VALID_DATA2: &str = "{\"key\": 43, \"value\": 42}";
 
-    async fn validate_against_volatile<F: Future<Output = Fn(&mut DiscreteFileStoreVolatileJson<u32, u32>, &TempDir)>>(
-        f: F,
-    ) {
-        let (mut store, dir) = empty_volatile_store();
-        (f.await)(&mut store, &dir);
-    }
-
-    async fn validate_against_non_volatile<
-        F: Future<Output = Fn(&mut DiscreteFileStoreNonVolatileJson<u32, Record<u32, u32>>, &TempDir),>
+    async fn validate_against_volatile<
+        F: Fn(DiscreteFileStoreVolatileJson<u32, u32>, TempDir) -> Fut,
+        Fut: Future<Output = ()>,
     >(
         f: F,
     ) {
-        let (mut store, dir) = empty_non_volatile_store();
-        (f.await)(&mut store, &dir);
+        let (store, dir) = empty_volatile_store();
+        f(store, dir).await;
+    }
+
+    async fn validate_against_non_volatile<
+        F: Fn(DiscreteFileStoreNonVolatileJson<u32, Record<u32, u32>>, TempDir) -> Fut,
+        Fut: Future<Output = ()>,
+    >(
+        f: F,
+    ) {
+        let (store, dir) = empty_non_volatile_store();
+        f(store, dir).await;
     }
 
     macro_rules! flush_clears_dir {
         ($store: ident, $dir: ident) => {
-            $store.put(42, 42).unwrap();
-            assert!($store.contains(&42));
+            $store.put(42, 42).await.unwrap();
+            assert!($store.contains(&42).await);
 
-            $store.flush();
+            $store.flush().await;
             assert_eq!(0, fs::read_dir($dir).unwrap().count())
         };
     }
 
     #[tokio::test]
     async fn flush_clears_dir() {
-        validate_against_volatile(|store, dir| {
+        validate_against_volatile(|mut store, dir| async move {
             flush_clears_dir!(store, dir);
-        });
-        validate_against_non_volatile(|store, dir| {
+        })
+        .await;
+        validate_against_non_volatile(|mut store, dir| async move {
             flush_clears_dir!(store, dir);
-        });
+        })
+        .await;
     }
 
     macro_rules! contains {
         ($store: ident) => {
-            assert!(!$store.contains(&42));
+            assert!(!$store.contains(&42).await);
 
-            $store.put(42, 42).unwrap();
-            assert!($store.contains(&42));
+            $store.put(42, 42).await.unwrap();
+            assert!($store.contains(&42).await);
 
-            $store.put(45, 42).unwrap();
-            assert!($store.contains(&42));
+            $store.put(45, 42).await.unwrap();
+            assert!($store.contains(&42).await);
 
-            $store.put(42, 0).unwrap();
-            assert!($store.contains(&42));
+            $store.put(42, 0).await.unwrap();
+            assert!($store.contains(&42).await);
 
-            $store.delete(&42).unwrap();
-            assert!(!$store.contains(&42));
+            $store.delete(&42).await.unwrap();
+            assert!(!$store.contains(&42).await);
         };
     }
 
     #[tokio::test]
     async fn contains() {
-        validate_against_volatile(|store, _dir| {
+        validate_against_volatile(|mut store, dir| async move {
+            let _dir = dir;
             contains!(store);
-        });
-        validate_against_non_volatile(|store, _dir| {
+        })
+        .await;
+        validate_against_non_volatile(|mut store, dir| async move {
+            let _dir = dir;
             contains!(store);
-        });
+        })
+        .await;
     }
 
     macro_rules! get_or_peek {
         ($func: ident, $store: ident) => {
             assert_eq!(None, $store.get(&42).await);
 
-            $store.put(42, 42).unwrap();
-            assert_eq!(42, $store.$func(&42).await.unwrap().into_owned());
+            $store.put(42, 42).await.unwrap();
+            assert_eq!(42, $store.$func(&42).await.unwrap());
             assert_eq!(None, $store.$func(&45).await);
 
-            $store.put(45, 42).unwrap();
-            assert_eq!(42, $store.$func(&42).await.unwrap().into_owned());
-            assert_eq!(42, $store.$func(&45).await.unwrap().into_owned());
+            $store.put(45, 42).await.unwrap();
+            assert_eq!(42, $store.$func(&42).await.unwrap());
+            assert_eq!(42, $store.$func(&45).await.unwrap());
 
-            $store.put(42, 55).unwrap();
-            assert_eq!(55, $store.$func(&42).await.unwrap().into_owned());
-            assert_eq!(42, $store.$func(&45).await.unwrap().into_owned());
+            $store.put(42, 55).await.unwrap();
+            assert_eq!(55, $store.$func(&42).await.unwrap());
+            assert_eq!(42, $store.$func(&45).await.unwrap());
         };
     }
 
     #[tokio::test]
     async fn get() {
-        validate_against_volatile(|store, _dir| async {
+        validate_against_volatile(|mut store, dir| async move {
+            let _dir = dir;
             get_or_peek!(get, store);
-        });
-        validate_against_non_volatile(|store, _dir| async {
+        })
+        .await;
+        validate_against_non_volatile(|mut store, dir| async move {
+            let _dir = dir;
             get_or_peek!(get, store);
-        });
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn peek() {
-        validate_against_volatile(|store, _dir| async {
+        validate_against_volatile(|mut store, dir| async move {
+            let _dir = dir;
             get_or_peek!(peek, store);
-        });
-        validate_against_non_volatile(|store, _dir| async {
+        })
+        .await;
+        validate_against_non_volatile(|mut store, dir| async move {
+            let _dir = dir;
             get_or_peek!(peek, store);
-        });
+        })
+        .await;
     }
 
     macro_rules! keys {
         ($store: ident) => {
-            assert_eq!(0, $store.keys().count());
+            assert_eq!(0, $store.keys().await.count());
 
-            $store.put(42, 42).unwrap();
-            assert_eq!(1, $store.keys().count());
+            $store.put(42, 42).await.unwrap();
+            assert_eq!(1, $store.keys().await.count());
 
-            $store.put(45, 45).unwrap();
-            assert_eq!(2, $store.keys().count());
+            $store.put(45, 45).await.unwrap();
+            assert_eq!(2, $store.keys().await.count());
 
-            $store.put(45, 50).unwrap();
-            let keys: BTreeSet<&u32> = $store.keys().collect();
+            $store.put(45, 50).await.unwrap();
+            let keys: BTreeSet<&u32> = $store.keys().await.collect();
             assert!(keys.contains(&42));
             assert!(keys.contains(&45));
             assert_eq!(2, keys.len());
@@ -608,40 +642,48 @@ use crate::store::discrete_files::{
 
     #[tokio::test]
     async fn keys() {
-        validate_against_volatile(|store, _dir| {
+        validate_against_volatile(|mut store, dir| async move {
+            let _dir = dir;
             keys!(store);
-        });
-        validate_against_non_volatile(|store, _dir| {
+        })
+        .await;
+        validate_against_non_volatile(|mut store, dir| async move {
+            let _dir = dir;
             keys!(store);
-        });
+        })
+        .await;
     }
 
     macro_rules! delete {
         ($store: ident) => {
-            $store.put(42, 42).unwrap();
-            $store.put(45, 42).unwrap();
-            assert!($store.contains(&42));
-            assert!($store.contains(&45));
+            $store.put(42, 42).await.unwrap();
+            $store.put(45, 42).await.unwrap();
+            assert!($store.contains(&42).await);
+            assert!($store.contains(&45).await);
 
-            $store.delete(&42).unwrap();
-            assert!(!$store.contains(&42));
-            assert!($store.contains(&45));
-            assert!($store.delete(&42).unwrap().is_none());
+            $store.delete(&42).await.unwrap();
+            assert!(!$store.contains(&42).await);
+            assert!($store.contains(&45).await);
+            assert!($store.delete(&42).await.unwrap().is_none());
 
-            $store.delete(&45).unwrap();
-            assert!(!$store.contains(&42));
-            assert!(!$store.contains(&45));
+            $store.delete(&45).await.unwrap();
+            assert!(!$store.contains(&42).await);
+            assert!(!$store.contains(&45).await);
         };
     }
 
     #[tokio::test]
     async fn delete() {
-        validate_against_volatile(|store, _dir| {
+        validate_against_volatile(|mut store, dir| async move {
+            let _dir = dir;
             delete!(store);
-        });
-        validate_against_non_volatile(|store, _dir| {
+        })
+        .await;
+        validate_against_non_volatile(|mut store, dir| async move {
+            let _dir = dir;
             delete!(store);
-        });
+        })
+        .await;
     }
 
     #[tokio::test]
@@ -670,13 +712,10 @@ use crate::store::discrete_files::{
         assert!(store.0.contains(&VALID_DATA1_KEY).await);
         assert_eq!(
             VALID_DATA1_KEY,
-            store.0.get(&VALID_DATA1_KEY).await.unwrap().into_owned()
+            store.0.get(&VALID_DATA1_KEY).await.unwrap()
         );
         assert!(store.0.contains(&VALID_DATA2_KEY).await);
-        assert_eq!(
-            42,
-            store.0.get(&VALID_DATA2_KEY).await.unwrap().into_owned()
-        );
+        assert_eq!(42, store.0.get(&VALID_DATA2_KEY).await.unwrap());
     }
 
     #[tokio::test]
@@ -685,7 +724,7 @@ use crate::store::discrete_files::{
         assert!(store.0.contains(&VALID_DATA1_KEY).await);
         assert_eq!(
             VALID_DATA1_KEY,
-            store.0.get(&VALID_DATA1_KEY).await.unwrap().into_owned()
+            store.0.get(&VALID_DATA1_KEY).await.unwrap()
         );
         assert!(!store.0.contains(&VALID_DATA2_KEY).await);
     }
@@ -742,7 +781,7 @@ use crate::store::discrete_files::{
         let mut store = DiscreteFileStoreVolatileJson::new(dir.path()).unwrap();
         store.put(32, foo.clone()).await.unwrap();
 
-        assert_eq!(foo, store.get(&32).await.unwrap().into_owned())
+        assert_eq!(foo, store.get(&32).await.unwrap())
     }
 
     fn empty_volatile_store() -> (DiscreteFileStoreVolatileJson<u32, u32>, TempDir) {

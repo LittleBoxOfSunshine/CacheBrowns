@@ -1,7 +1,7 @@
 use crate::store::Store;
 use crate::CacheBrownsResult;
 use itertools::Itertools;
-use std::borrow::{Borrow, Cow};
+use std::borrow::Borrow;
 use std::collections::{hash_map, HashMap};
 use std::vec;
 
@@ -30,17 +30,21 @@ impl<Key: Eq + std::hash::Hash + Send + Sync, Value: Clone + Send + Sync> Store
 {
     type Key = Key;
     type Value = Value;
-    type KeyRefIterator<'k> = hash_map::Keys<'k, Key, Value> where Key: 'k, Value: 'k;
+    type KeyRefIterator<'k>
+        = hash_map::Keys<'k, Key, Value>
+    where
+        Key: 'k,
+        Value: 'k;
     type FlushResultIterator = vec::IntoIter<CacheBrownsResult<Key>>;
 
-    async fn get<Q: Borrow<Key> + Sync>(&self, key: &Q) -> Option<Cow<Self::Value>> {
+    async fn get<Q: Borrow<Key> + Sync>(&self, key: &Q) -> Option<Self::Value> {
         self.peek(key).await
     }
 
     async fn poke<Q: Borrow<Self::Key> + Sync>(&self, _key: &Q) {}
 
-    async fn peek<Q: Borrow<Key> + Sync>(&self, key: &Q) -> Option<Cow<Value>> {
-        self.data.get(key.borrow()).map(|v| Cow::Borrowed(v))
+    async fn peek<Q: Borrow<Key> + Sync>(&self, key: &Q) -> Option<Value> {
+        self.data.get(key.borrow()).cloned()
     }
 
     async fn put(&mut self, key: Self::Key, value: Self::Value) -> CacheBrownsResult<()> {
@@ -53,7 +57,10 @@ impl<Key: Eq + std::hash::Hash + Send + Sync, Value: Clone + Send + Sync> Store
         Ok(())
     }
 
-    async fn delete<Q: Borrow<Self::Key> + Sync>(&mut self, key: &Q) -> CacheBrownsResult<Option<Key>> {
+    async fn delete<Q: Borrow<Self::Key> + Sync>(
+        &mut self,
+        key: &Q,
+    ) -> CacheBrownsResult<Option<Key>> {
         Ok(self.data.remove_entry(key.borrow()).map(|(k, _v)| k))
     }
 
@@ -96,7 +103,7 @@ mod tests {
 
         assert_eq!(3, store.keys().await.len());
 
-        store.flush();
+        store.flush().await;
 
         assert_eq!(0, store.keys().await.len());
     }
@@ -108,7 +115,7 @@ mod tests {
 
         let store = MemoryStore::from(map);
 
-        assert_eq!(1, *store.get(&1).await.unwrap());
+        assert_eq!(1, store.get(&1).await.unwrap());
         assert_eq!(1, store.keys().await.len())
     }
 }

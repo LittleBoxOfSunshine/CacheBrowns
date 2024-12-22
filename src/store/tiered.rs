@@ -1,6 +1,6 @@
 use crate::store::Store;
 use crate::CacheBrownsResult;
-use std::borrow::{Borrow, Cow};
+use std::borrow::Borrow;
 use tokio::sync::RwLock;
 /*
 Tiered works with ripple propagation
@@ -62,7 +62,12 @@ where
     Tier: Store<Key = K, Value = V>,
     Next: Store<Key = K, Value = V>,
 {
-    async fn inner_put(next: &mut Next, inner: &mut Tier, key: K, value: V) -> CacheBrownsResult<()> {
+    async fn inner_put(
+        next: &mut Next,
+        inner: &mut Tier,
+        key: K,
+        value: V,
+    ) -> CacheBrownsResult<()> {
         next.put(key.clone(), value.clone()).await?;
         inner.put(key, value).await
     }
@@ -104,13 +109,17 @@ where
 {
     type Key = Tier::Key;
     type Value = Tier::Value;
-    type KeyRefIterator<'k> = Next::KeyRefIterator<'k> where Self::Key: 'k, Self: 'k;
+    type KeyRefIterator<'k>
+        = Next::KeyRefIterator<'k>
+    where
+        Self::Key: 'k,
+        Self: 'k;
     type FlushResultIterator = std::iter::Chain<
         <Next as Store>::FlushResultIterator,
         <Tier as Store>::FlushResultIterator,
     >;
 
-    async fn get<Q: Borrow<Self::Key> + Sync>(&self, key: &Q) -> Option<Cow<Self::Value>> {
+    async fn get<Q: Borrow<Self::Key> + Sync>(&self, key: &Q) -> Option<Self::Value> {
         let lock = self.inner.read().await;
         let current_tier_value = lock.get(key).await;
 
@@ -122,13 +131,9 @@ where
                 match self.ripple_mode {
                     RippleMode::Unified => {
                         self.next.read().await.poke(key).await;
-                        let value = value.to_owned();
                         Some(value)
                     }
-                    RippleMode::ShortCircuit => {
-                        let value2 = value.to_owned();
-                        Some(value2)
-                    },
+                    RippleMode::ShortCircuit => Some(value),
                 }
             }
             None => {
@@ -141,8 +146,7 @@ where
                             .inner
                             .write()
                             .await
-                            .put(key.borrow().clone(), value.clone().into_owned());
-                        let value = value.to_owned();
+                            .put(key.borrow().clone(), value.clone());
                         Some(value)
                     }
                 }
@@ -155,13 +159,15 @@ where
         self.inner.read().await.poke(key);
     }
 
-    async fn peek<Q: Borrow<Self::Key> + Sync>(&self, key: &Q) -> Option<Cow<Self::Value>> {
+    async fn peek<Q: Borrow<Self::Key> + Sync>(&self, key: &Q) -> Option<Self::Value> {
         // We want to exit on the cheapest value, as it will match all the way down.
         // No side effects exist to consider, so no propagation is needed.
-        match self.inner.read().await.peek(key).await {
-            None => self.next.read().await.peek(key).await,
-            Some(value) => Some(value),
-        }
+        self.inner
+            .read()
+            .await
+            .peek(key)
+            .await
+            .or(self.next.read().await.peek(key).await)
     }
 
     async fn put(&mut self, key: Self::Key, value: Self::Value) -> CacheBrownsResult<()> {
@@ -171,10 +177,15 @@ where
             key,
             value,
         )
+        .await
     }
 
     async fn update(&mut self, key: Self::Key, value: Self::Value) -> CacheBrownsResult<()> {
-        self.next.write().await.update(key.clone(), value.clone()).await?;
+        self.next
+            .write()
+            .await
+            .update(key.clone(), value.clone())
+            .await?;
         self.inner.write().await.update(key, value).await
     }
 
@@ -196,7 +207,7 @@ where
             None => self.inner.write().await.take(key).await,
             // Attempt to cascade up the stack, we already have value so use cheaper delete
             Some(lower_value) => {
-                match self.inner.write().await.delete(key) {
+                match self.inner.write().await.delete(key).await {
                     Ok(_) => Ok(Some(lower_value)),
                     // We have a value, but we need to ensure higher tiers don't attempt deletes to
                     // prevent rollbacks
@@ -208,14 +219,14 @@ where
     }
 
     async fn flush(&mut self) -> Self::FlushResultIterator {
-        let low_tiers = self.next.write().await.flush();
-        let flushed_here = self.inner.write().await.flush();
+        let low_tiers = self.next.write().await.flush().await;
+        let flushed_here = self.inner.write().await.flush().await;
         low_tiers.chain(flushed_here)
     }
 
     async fn keys(&self) -> Self::KeyRefIterator<'_> {
         // From an external perspective, store is a monolith. Propagate to lowest (biggest) tier.
-        unsafe { (*self.next.read().await).keys().await }
+        self.next.read().await.keys().await
     }
 
     async fn contains<Q: Borrow<Self::Key> + Sync>(&self, key: &Q) -> bool {
@@ -230,10 +241,14 @@ where
 {
     type Key = Tier::Key;
     type Value = Tier::Value;
-    type KeyRefIterator<'k> = std::slice::Iter<'k, &'k <Tier as Store>::Key> where <Tier as Store>::Key: 'k, Self: 'k;
+    type KeyRefIterator<'k>
+        = std::slice::Iter<'k, &'k <Tier as Store>::Key>
+    where
+        <Tier as Store>::Key: 'k,
+        Self: 'k;
     type FlushResultIterator = Tier::FlushResultIterator;
 
-    async fn get<Q: Borrow<Self::Key> + Sync>(&self, key: &Q) -> Option<Cow<Self::Value>> {
+    async fn get<Q: Borrow<Self::Key> + Sync>(&self, key: &Q) -> Option<Self::Value> {
         let lock = self.next.read().await;
         lock.get(key).await.to_owned()
     }
@@ -242,7 +257,7 @@ where
         unsafe { (*self.next.read().await).poke(key).await }
     }
 
-    async fn peek<Q: Borrow<Self::Key> + Sync>(&self, key: &Q) -> Option<Cow<Self::Value>> {
+    async fn peek<Q: Borrow<Self::Key> + Sync>(&self, key: &Q) -> Option<Self::Value> {
         unsafe { (*self.next.read().await).peek(key).await }
     }
 
