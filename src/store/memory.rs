@@ -1,7 +1,7 @@
 use crate::store::Store;
-use crate::CacheBrownsResult;
+use crate::{CacheBrownsResult, CowIterator};
 use itertools::Itertools;
-use std::borrow::Borrow;
+use std::borrow::{Borrow, Cow};
 use std::collections::{hash_map, HashMap};
 use std::vec;
 
@@ -25,13 +25,15 @@ impl<Key, Value> From<HashMap<Key, Value>> for MemoryStore<Key, Value> {
     }
 }
 
-impl<Key: Eq + std::hash::Hash + Send + Sync, Value: Clone + Send + Sync> Store
+impl<Key: Clone + Eq + std::hash::Hash + Send + Sync, Value: Clone + Send + Sync> Store
     for MemoryStore<Key, Value>
 {
     type Key = Key;
     type Value = Value;
     type KeyRefIterator<'k>
-        = hash_map::Keys<'k, Key, Value>
+        //= std::iter::Map<hash_map::Keys<'k, Key, Value>, fn(<hash_map::Keys<'k, Key, Value> as std::iter::Iterator>::Item) -> std::borrow::Cow<'k, <hash_map::Keys<'k, Key, Value> as std::iter::Iterator>::Item>>
+        //= CowIterator!('k, hash_map::Keys<'k, Key, Value>)
+        = std::iter::Map<hash_map::Keys<'k, Key, Value>, fn(&'k Key) -> Cow<'k, Key>>
     where
         Key: 'k,
         Value: 'k;
@@ -80,7 +82,7 @@ impl<Key: Eq + std::hash::Hash + Send + Sync, Value: Clone + Send + Sync> Store
     }
 
     async fn keys(&self) -> Self::KeyRefIterator<'_> {
-        self.data.keys()
+        self.data.keys().map(|k| Cow::Borrowed(k))
     }
 
     async fn contains<Q: Borrow<Self::Key> + Sync>(&self, key: &Q) -> bool {

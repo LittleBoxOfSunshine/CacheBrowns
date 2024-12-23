@@ -1,19 +1,20 @@
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
-use std::borrow::Borrow;
+use std::borrow::{Borrow, Cow};
 use std::collections::hash_map::Drain;
 use std::collections::{hash_map, HashMap};
 use std::fmt::Debug;
 use std::fs::File;
 use std::hash::Hash;
 use std::io::{BufReader, BufWriter, Error, ErrorKind};
+use std::iter::Map;
 use std::path::{Path, PathBuf};
 use std::{fs, vec};
 use uuid::Uuid;
 
 // TODO: Support the notion of versioning?
 
-use crate::store::Store;
+use crate::store::{IterExt, Store};
 use crate::CacheBrownsResult;
 
 /// Stores each element in a unique file, serialized. A single directory is used to represent the
@@ -98,7 +99,7 @@ where
     type Key = Key;
     type Value = Value;
     type KeyRefIterator<'k>
-        = hash_map::Keys<'k, Key, PathBuf>
+        = Map<hash_map::Keys<'k, Key, PathBuf>, fn(&'k Key) -> Cow<'k, Key>>
     where
         Key: 'k,
         Value: 'k,
@@ -143,19 +144,10 @@ where
         &mut self,
         key: &Q,
     ) -> CacheBrownsResult<Option<(Self::Key, Self::Value)>> {
-        //let entry =
         Ok(
             take::<Serde, Key, Record<Key, Value>>(&mut self.index, key.borrow())?
                 .map(|(k, v)| (k, v.value)),
         )
-        //?;
-
-        // match entry {
-        //     None => Ok(None),
-        //     Some((key, record)) => {
-        //         Ok(Some((key, Cow::Owned(record.value))))
-        //     }
-        // }
     }
 
     async fn flush(&mut self) -> Self::FlushResultIterator {
@@ -164,7 +156,7 @@ where
 
     //noinspection DuplicatedCode
     async fn keys(&self) -> Self::KeyRefIterator<'_> {
-        self.index.keys()
+        self.index.keys().into_cow_iter()
     }
 
     async fn contains<Q: Borrow<Self::Key> + Sync>(&self, key: &Q) -> bool {
@@ -242,7 +234,7 @@ where
     type Key = Key;
     type Value = Value;
     type KeyRefIterator<'k>
-        = hash_map::Keys<'k, Key, PathBuf>
+        = Map<hash_map::Keys<'k, Key, PathBuf>, fn(&'k Key) -> Cow<'k, Key>>
     where
         Key: 'k,
         Value: 'k,
@@ -302,7 +294,7 @@ where
     }
 
     async fn keys(&self) -> Self::KeyRefIterator<'_> {
-        self.index.keys()
+        self.index.keys().into_cow_iter()
     }
 
     async fn contains<Q: Borrow<Self::Key> + Sync>(&self, key: &Q) -> bool {
@@ -633,7 +625,7 @@ mod tests {
             assert_eq!(2, $store.keys().await.count());
 
             $store.put(45, 50).await.unwrap();
-            let keys: BTreeSet<&u32> = $store.keys().await.collect();
+            let keys: BTreeSet<u32> = $store.keys().await.map(|k| k.into_owned()).collect();
             assert!(keys.contains(&42));
             assert!(keys.contains(&45));
             assert_eq!(2, keys.len());
@@ -644,6 +636,11 @@ mod tests {
     async fn keys() {
         validate_against_volatile(|mut store, dir| async move {
             let _dir = dir;
+            let keys: BTreeSet<u32> = store.keys().await.map(|k| k.into_owned()).collect();
+            assert!(keys.contains(&42));
+            assert!(keys.contains(&45));
+            assert_eq!(2, keys.len());
+
             keys!(store);
         })
         .await;

@@ -1,9 +1,9 @@
 // This implementation borrows heavily from https://crates.io/crates/lru
 
-use crate::store::Store;
+use crate::store::{IterExt, Store};
 use crate::CacheBrownsResult;
 use itertools::Itertools;
-use std::borrow::Borrow;
+use std::borrow::{Borrow, Cow};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
@@ -141,7 +141,7 @@ where
         // If the data store is non-volatile, there might already be data present. Iterate through
         // the values to build out an arbitrary usage order.
         for key in lru.store.keys().await {
-            lru.add_to_usage_order(key.clone());
+            lru.add_to_usage_order(key.into_owned());
         }
 
         lru.remove_excess_entries().await?;
@@ -277,7 +277,7 @@ where
 
     // Avoid underlying [`keys`] implementation to guarantee an all memory operation.
     type KeyRefIterator<'k>
-        = vec::IntoIter<&'k Self::Key>
+        = std::iter::Map<vec::IntoIter<&'k Key>, fn(&'k Key) -> Cow<'k, Key>>
     where
         Key: 'k,
         Value: 'k,
@@ -355,6 +355,7 @@ where
                 .map(|k| &*k.key)
                 .collect_vec()
                 .into_iter()
+                .into_cow_iter()
         }
     }
 
@@ -376,10 +377,10 @@ where
 mod tests {
     use crate::store::memory::MemoryStore;
     use crate::store::replacement::lru::{KeyRef, LruReplacement};
-    use crate::store::Store;
+    use crate::store::{IntoOwnedIterExt, IterExt, Store};
     use crate::CacheBrownsResult;
     use itertools::{assert_equal, Itertools};
-    use std::borrow::Borrow;
+    use std::borrow::{Borrow, Cow};
     use std::collections::BTreeSet;
     use std::fmt::Debug;
     use std::hash::Hash;
@@ -582,7 +583,7 @@ mod tests {
 
         // Order isn't guaranteed, so just check that exactly one was deleted.
         let index_sum: i32 = store.index.borrow().keys().map(|k| unsafe { *k.key }).sum();
-        let store_sum: i32 = store.store.keys().await.cloned().sum();
+        let store_sum: i32 = store.store.keys().await.into_owned().sum();
         assert!(index_sum == 3 || index_sum == 6 || index_sum == 5);
 
         // We picked powers of 2, so checking sum rather than all values is sufficient for equality.
@@ -677,8 +678,8 @@ mod tests {
         }
 
         assert_equal::<BTreeSet<u32>, BTreeSet<u32>>(
-            BTreeSet::from_iter(store.keys().await.cloned()),
-            BTreeSet::from_iter(store2.keys().await.cloned()),
+            BTreeSet::from_iter(store.keys().await.into_owned()),
+            BTreeSet::from_iter(store2.keys().await.into_owned()),
         );
     }
 
@@ -719,7 +720,7 @@ mod tests {
         type Key = u32;
         type Value = u32;
         type KeyRefIterator<'k>
-            = vec::IntoIter<&'k u32>
+            = std::iter::Map<vec::IntoIter<&'k u32>, fn(&'k u32) -> Cow<'k, u32>>
         where
             Self::Key: 'k,
             Self: 'k;
@@ -764,7 +765,7 @@ mod tests {
         }
 
         async fn keys(&self) -> Self::KeyRefIterator<'_> {
-            self.vec.iter().collect_vec().into_iter()
+            self.vec.iter().collect_vec().into_iter().into_cow_iter()
         }
 
         async fn contains<Q: Borrow<Self::Key> + Sync>(&self, _key: &Q) -> bool {

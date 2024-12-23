@@ -1,5 +1,5 @@
 use crate::CacheBrownsResult;
-use std::borrow::Borrow;
+use std::borrow::{Borrow, Cow};
 
 // TODO: Now that the lifetimes are gone, automock should work without all the double structures.s
 
@@ -10,6 +10,42 @@ pub mod replacement;
 
 // TODO: Demonstrate integration with fast external store like: https://crates.io/crates/scc
 // TODO: Add link for blog post
+
+#[macro_export]
+macro_rules! CowIterator {
+    ($lifetime:tt, $keys:ty) => {
+        std::iter::Map<$keys, fn(&$lifetime <$keys as std::iter::Iterator>::Item) -> std::borrow::Cow<$lifetime, *<$keys as std::iter::Iterator>::Item>>
+    };
+}
+
+trait DerefItem {
+    type Target;
+}
+
+impl<'a, T> DerefItem for &'a T {
+    type Target = T;
+}
+
+pub trait IterExt<'a, V: 'a + Clone>: Iterator<Item = &'a V> + Sized {
+    //fn into_cow_iter(self) -> std::iter::Map<Self, fn(&'a V) -> Cow<'a, V>>;
+
+    fn into_cow_iter(self) -> std::iter::Map<Self, fn(&'a V) -> Cow<'a, V>> {
+        self.map(|v| Cow::Borrowed(v))
+    }
+}
+
+impl<'a, T: ?Sized, V: 'a + Clone> IterExt<'a, V> for T where T: Iterator<Item = &'a V> + Sized {}
+
+pub trait IntoOwnedIterExt<'a, V: Clone + 'a>: Iterator<Item = Cow<'a, V>> + Sized {
+    fn into_owned(self) -> std::iter::Map<Self, fn(Cow<'a, V>) -> V> {
+        self.map(|v| v.into_owned())
+    }
+}
+
+impl<'a, T: ?Sized, V: 'a + Clone> IntoOwnedIterExt<'a, V> for T where
+    T: Iterator<Item = Cow<'a, V>> + Sized
+{
+}
 
 /// A [`Store`] is the base layer of a [`crate::managed_cache::ManagedCache`] that handles the
 /// storage of data. The actual representation of the underlying data is arbitrary, and higher
@@ -87,10 +123,10 @@ pub mod replacement;
 /// going to make or break the implementation in either direction.
 #[trait_variant::make(Send)]
 pub trait Store {
-    type Key: Send + Sync;
+    type Key: Clone + Send + Sync;
     type Value: Clone + Send + Sync;
 
-    type KeyRefIterator<'k>: Iterator<Item = &'k Self::Key>
+    type KeyRefIterator<'k>: Iterator<Item = Cow<'k, Self::Key>>
     where
         Self::Key: 'k,
         Self: 'k;
@@ -268,7 +304,7 @@ pub mod test_helpers {
         type Value = i32;
 
         type KeyRefIterator<'k>
-            = vec::IntoIter<&'k i32>
+            = std::iter::Map<vec::IntoIter<&'k i32>, fn(&'k i32) -> Cow<'k, i32>>
         where
             <MockStoreWrapper as super::Store>::Key: 'k,
             Self: 'k;
@@ -314,7 +350,7 @@ pub mod test_helpers {
         }
 
         async fn keys(&self) -> Self::KeyRefIterator<'_> {
-            self.inner.keys()
+            self.inner.keys().into_cow_iter()
         }
 
         async fn contains<Q: Borrow<Self::Key> + Sync>(&self, key: &Q) -> bool {
