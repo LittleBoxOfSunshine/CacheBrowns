@@ -6,15 +6,16 @@ use std::borrow::{Borrow, Cow};
 pub mod discrete_files;
 pub mod memory;
 pub mod replacement;
-//pub mod tiered;
+pub mod tiered;
 
 // TODO: Demonstrate integration with fast external store like: https://crates.io/crates/scc
 // TODO: Add link for blog post
 
 #[macro_export]
 macro_rules! CowIterator {
-    ($lifetime:tt, $keys:ty) => {
-        std::iter::Map<$keys, fn(&$lifetime <$keys as std::iter::Iterator>::Item) -> std::borrow::Cow<$lifetime, *<$keys as std::iter::Iterator>::Item>>
+    ($lifetime:tt, $key: ty, $iter:ty) => {
+        //std::iter::Map<$keys, fn(&$lifetime <$keys as std::iter::Iterator>::Item) -> std::borrow::Cow<$lifetime, *<$keys as std::iter::Iterator>::Item>>
+        std::iter::Map<$iter, fn(&$lifetime $key) -> std::borrow::Cow<$lifetime, $key>>
     };
 }
 

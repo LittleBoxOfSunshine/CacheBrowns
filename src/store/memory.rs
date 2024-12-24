@@ -32,8 +32,8 @@ impl<Key: Clone + Eq + std::hash::Hash + Send + Sync, Value: Clone + Send + Sync
     type Value = Value;
     type KeyRefIterator<'k>
         //= std::iter::Map<hash_map::Keys<'k, Key, Value>, fn(<hash_map::Keys<'k, Key, Value> as std::iter::Iterator>::Item) -> std::borrow::Cow<'k, <hash_map::Keys<'k, Key, Value> as std::iter::Iterator>::Item>>
-        //= CowIterator!('k, hash_map::Keys<'k, Key, Value>)
-        = std::iter::Map<hash_map::Keys<'k, Key, Value>, fn(&'k Key) -> Cow<'k, Key>>
+        = CowIterator!('k, Key, hash_map::Keys<'k, Key, Value>)
+        // = std::iter::Map<hash_map::Keys<'k, Key, Value>, fn(&'k Key) -> Cow<'k, Key>>
     where
         Key: 'k,
         Value: 'k;

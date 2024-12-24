@@ -1,6 +1,8 @@
+use crate::store::IntoOwnedIterExt;
 use crate::store::Store;
-use crate::CacheBrownsResult;
+use crate::{CacheBrownsResult, CowIterator};
 use std::borrow::Borrow;
+use itertools::Itertools;
 use tokio::sync::RwLock;
 /*
 Tiered works with ripple propagation
@@ -226,7 +228,8 @@ where
 
     async fn keys(&self) -> Self::KeyRefIterator<'_> {
         // From an external perspective, store is a monolith. Propagate to lowest (biggest) tier.
-        self.next.read().await.keys().await
+        self.next.read().await.keys().await.collect_vec().into_iter()
+        //.await.into_owned()
     }
 
     async fn contains<Q: Borrow<Self::Key> + Sync>(&self, key: &Q) -> bool {
@@ -242,7 +245,7 @@ where
     type Key = Tier::Key;
     type Value = Tier::Value;
     type KeyRefIterator<'k>
-        = std::slice::Iter<'k, &'k <Tier as Store>::Key>
+        = CowIterator!('k, <Tier as Store>::Key, std::slice::Iter<'k, &'k <Tier as Store>::Key>)
     where
         <Tier as Store>::Key: 'k,
         Self: 'k;
