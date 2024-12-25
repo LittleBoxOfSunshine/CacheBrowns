@@ -214,7 +214,7 @@ pub mod test_helpers {
             unimplemented!()
         }
 
-        pub fn peek<'a>(&self, _key: &i32) -> Option<i32> {
+        pub fn peek(&self, _key: &i32) -> Option<i32> {
             unimplemented!()
         }
 

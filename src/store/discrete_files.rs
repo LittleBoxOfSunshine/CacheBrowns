@@ -429,8 +429,8 @@ where
     for<'a> Value: Serialize + Deserialize<'a>,
 {
     fn serialize(buffered_writer: BufWriter<File>, value: &Value) -> CacheBrownsResult<()> {
-        Ok(serde_json::to_writer(buffered_writer, &value)
-            .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + 'static>)?)
+        serde_json::to_writer(buffered_writer, &value)
+            .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + 'static>)
     }
 
     fn deserialize(buffered_reader: BufReader<File>) -> Option<Value> {
@@ -451,8 +451,8 @@ where
     for<'a> Value: Serialize + Deserialize<'a>,
 {
     fn serialize(buffered_writer: BufWriter<File>, value: &Value) -> CacheBrownsResult<()> {
-        Ok(bincode::serialize_into(buffered_writer, &value)
-            .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + 'static>)?)
+        bincode::serialize_into(buffered_writer, &value)
+            .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + 'static>)
     }
 
     fn deserialize(buffered_reader: BufReader<File>) -> Option<Value> {

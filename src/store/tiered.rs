@@ -140,7 +140,8 @@ where
                             .inner
                             .write()
                             .await
-                            .put(key.borrow().clone(), value.clone());
+                            .put(key.borrow().clone(), value.clone())
+                            .await;
                         Some(value)
                     }
                 }
