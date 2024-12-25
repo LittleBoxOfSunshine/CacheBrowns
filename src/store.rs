@@ -1,6 +1,6 @@
 use crate::CacheBrownsResult;
 use std::borrow::{Borrow, Cow};
-
+use itertools::Itertools;
 // TODO: Now that the lifetimes are gone, automock should work without all the double structures.s
 
 pub mod discrete_files;
@@ -14,8 +14,14 @@ pub mod tiered;
 #[macro_export]
 macro_rules! CowIterator {
     ($lifetime:tt, $key: ty, $iter:ty) => {
-        //std::iter::Map<$keys, fn(&$lifetime <$keys as std::iter::Iterator>::Item) -> std::borrow::Cow<$lifetime, *<$keys as std::iter::Iterator>::Item>>
         std::iter::Map<$iter, fn(&$lifetime $key) -> std::borrow::Cow<$lifetime, $key>>
+    };
+}
+
+#[macro_export]
+macro_rules! NestedCowIterator {
+    ($lifetime:tt, $key: ty, $iter:ty) => {
+        std::iter::Map<$iter, fn(Cow<$lifetime, $key>) -> std::borrow::Cow<$lifetime, $key>>
     };
 }
 
@@ -37,13 +43,22 @@ pub trait IterExt<'a, V: 'a + Clone>: Iterator<Item = &'a V> + Sized {
 
 impl<'a, T: ?Sized, V: 'a + Clone> IterExt<'a, V> for T where T: Iterator<Item = &'a V> + Sized {}
 
-pub trait IntoOwnedIterExt<'a, V: Clone + 'a>: Iterator<Item = Cow<'a, V>> + Sized {
+pub trait CowIterExt<'a, V: Clone + 'a>: Iterator<Item = Cow<'a, V>> + Sized {
     fn into_owned(self) -> std::iter::Map<Self, fn(Cow<'a, V>) -> V> {
         self.map(|v| v.into_owned())
     }
+
+    // fn into_as_owned<'k>(self) -> std::iter::Map<Self, fn(Cow<'k, V>) -> Cow<'_, V>> {
+    //     self.map(|v| Cow::Owned(v.into_owned()))
+    // }
+
+    //std::iter::Map<Self, fn(Cow<'_, V>) -> std::vec::IntoIter<Cow<'_, V>>>
+    fn into_as_owned(self) -> std::vec::IntoIter<Cow<'a, V>> {
+        self.map(|v| Cow::Owned(v.into_owned())).collect_vec().into_iter()
+    }
 }
 
-impl<'a, T: ?Sized, V: 'a + Clone> IntoOwnedIterExt<'a, V> for T where
+impl<'a, T: ?Sized, V: 'a + Clone> CowIterExt<'a, V> for T where
     T: Iterator<Item = Cow<'a, V>> + Sized
 {
 }

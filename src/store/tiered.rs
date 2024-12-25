@@ -1,7 +1,7 @@
-use crate::store::IntoOwnedIterExt;
+use crate::store::CowIterExt;
 use crate::store::Store;
-use crate::{CacheBrownsResult, CowIterator};
-use std::borrow::Borrow;
+use crate::{CacheBrownsResult, CowIterator, NestedCowIterator};
+use std::borrow::{Borrow, Cow};
 use itertools::Itertools;
 use tokio::sync::RwLock;
 /*
@@ -112,7 +112,8 @@ where
     type Key = Tier::Key;
     type Value = Tier::Value;
     type KeyRefIterator<'k>
-        = Next::KeyRefIterator<'k>
+        = std::vec::IntoIter<Cow<'k, Self::Key>>
+        // = NestedCowIterator!('k, <Tier as Store>::Key, Next::KeyRefIterator<'k>)
     where
         Self::Key: 'k,
         Self: 'k;
@@ -157,8 +158,8 @@ where
     }
 
     async fn poke<Q: Borrow<Self::Key> + Sync>(&self, key: &Q) {
-        self.next.read().await.poke(key);
-        self.inner.read().await.poke(key);
+        self.next.read().await.poke(key).await;
+        self.inner.read().await.poke(key).await;
     }
 
     async fn peek<Q: Borrow<Self::Key> + Sync>(&self, key: &Q) -> Option<Self::Value> {
@@ -228,8 +229,22 @@ where
 
     async fn keys(&self) -> Self::KeyRefIterator<'_> {
         // From an external perspective, store is a monolith. Propagate to lowest (biggest) tier.
-        self.next.read().await.keys().await.collect_vec().into_iter()
-        //.await.into_owned()
+        let lock = self.next.read().await;
+        let keys = lock.keys().await;
+
+        let mut derp = Vec::new();
+        for key in keys {
+            let cow: Cow<'_, Self::Key> = Cow::Owned(key.into_owned());
+            derp.push(cow)
+        }
+
+        // keys.into_as_owned()
+        //let keys = keys.map(|v| Cow::Owned(v.into_owned()));
+        // keys
+        //let keys: Vec<Cow<'_, Self::Key>> = keys.collect_vec();
+        derp.into_iter()
+        // keys.into_as_owned().collect_vec().into_iter()
+        //map(|v| v.as_owned())
     }
 
     async fn contains<Q: Borrow<Self::Key> + Sync>(&self, key: &Q) -> bool {
@@ -245,7 +260,7 @@ where
     type Key = Tier::Key;
     type Value = Tier::Value;
     type KeyRefIterator<'k>
-        = CowIterator!('k, <Tier as Store>::Key, std::slice::Iter<'k, &'k <Tier as Store>::Key>)
+        = NestedCowIterator!('k, <Tier as Store>::Key, std::slice::Iter<'k, &'k <Tier as Store>::Key>)
     where
         <Tier as Store>::Key: 'k,
         Self: 'k;
@@ -315,7 +330,7 @@ mod tests {
             TieredStore::new(RippleMode::ShortCircuit, MemoryStore::new()).tier(MemoryStore::new());
 
         assert!(store.put(0, 0).await.is_ok());
-        assert_eq!(0, *store.get(&0).await.unwrap())
+        assert_eq!(0, store.get(&0).await.unwrap())
     }
 
     #[tokio::test]

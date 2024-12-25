@@ -377,7 +377,7 @@ where
 mod tests {
     use crate::store::memory::MemoryStore;
     use crate::store::replacement::lru::{KeyRef, LruReplacement};
-    use crate::store::{IntoOwnedIterExt, IterExt, Store};
+    use crate::store::{CowIterExt, IterExt, Store};
     use crate::CacheBrownsResult;
     use itertools::{assert_equal, Itertools};
     use std::borrow::{Borrow, Cow};
