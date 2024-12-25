@@ -1,6 +1,6 @@
 use crate::CacheBrownsResult;
-use std::borrow::{Borrow, Cow};
 use itertools::Itertools;
+use std::borrow::{Borrow, Cow};
 // TODO: Now that the lifetimes are gone, automock should work without all the double structures.s
 
 pub mod discrete_files;
@@ -10,58 +10,6 @@ pub mod tiered;
 
 // TODO: Demonstrate integration with fast external store like: https://crates.io/crates/scc
 // TODO: Add link for blog post
-
-#[macro_export]
-macro_rules! CowIterator {
-    ($lifetime:tt, $key: ty, $iter:ty) => {
-        std::iter::Map<$iter, fn(&$lifetime $key) -> std::borrow::Cow<$lifetime, $key>>
-    };
-}
-
-#[macro_export]
-macro_rules! NestedCowIterator {
-    ($lifetime:tt, $key: ty, $iter:ty) => {
-        std::iter::Map<$iter, fn(Cow<$lifetime, $key>) -> std::borrow::Cow<$lifetime, $key>>
-    };
-}
-
-trait DerefItem {
-    type Target;
-}
-
-impl<'a, T> DerefItem for &'a T {
-    type Target = T;
-}
-
-pub trait IterExt<'a, V: 'a + Clone>: Iterator<Item = &'a V> + Sized {
-    //fn into_cow_iter(self) -> std::iter::Map<Self, fn(&'a V) -> Cow<'a, V>>;
-
-    fn into_cow_iter(self) -> std::iter::Map<Self, fn(&'a V) -> Cow<'a, V>> {
-        self.map(|v| Cow::Borrowed(v))
-    }
-}
-
-impl<'a, T: ?Sized, V: 'a + Clone> IterExt<'a, V> for T where T: Iterator<Item = &'a V> + Sized {}
-
-pub trait CowIterExt<'a, V: Clone + 'a>: Iterator<Item = Cow<'a, V>> + Sized {
-    fn into_owned(self) -> std::iter::Map<Self, fn(Cow<'a, V>) -> V> {
-        self.map(|v| v.into_owned())
-    }
-
-    // fn into_as_owned<'k>(self) -> std::iter::Map<Self, fn(Cow<'k, V>) -> Cow<'_, V>> {
-    //     self.map(|v| Cow::Owned(v.into_owned()))
-    // }
-
-    //std::iter::Map<Self, fn(Cow<'_, V>) -> std::vec::IntoIter<Cow<'_, V>>>
-    fn into_as_owned(self) -> std::vec::IntoIter<Cow<'a, V>> {
-        self.map(|v| Cow::Owned(v.into_owned())).collect_vec().into_iter()
-    }
-}
-
-impl<'a, T: ?Sized, V: 'a + Clone> CowIterExt<'a, V> for T where
-    T: Iterator<Item = Cow<'a, V>> + Sized
-{
-}
 
 /// A [`Store`] is the base layer of a [`crate::managed_cache::ManagedCache`] that handles the
 /// storage of data. The actual representation of the underlying data is arbitrary, and higher
@@ -142,14 +90,11 @@ pub trait Store {
     type Key: Clone + Send + Sync;
     type Value: Clone + Send + Sync;
 
-    type KeyRefIterator<'k>: Iterator<Item = Cow<'k, Self::Key>>
-    where
-        Self::Key: 'k,
-        Self: 'k;
+    type KeyIterator: Iterator<Item = Self::Key>;
 
     // TODO: Why was it ok not to have keys returned with failures? Presumably was an optimization and/or avoid Clone on Key
     // TODO: Should it be a multimap? This is useful for Tiered store but redundant on individual stores
-    type FlushResultIterator: Iterator<Item = CacheBrownsResult<Self::Key>>;
+    type FlushResultIterator: Iterator<Item = CacheBrownsResult<Self::Key>> + Send;
 
     /// Get a copy of the value associated with the key, if it exists. This function must induce any
     /// side effects that are appropriate for the semantics of the implementation. For example, if
@@ -247,7 +192,7 @@ pub trait Store {
     async fn flush(&mut self) -> Self::FlushResultIterator;
 
     /// An iterator of arbitrary order over the keys held in the [`Store`], by reference.
-    async fn keys(&self) -> Self::KeyRefIterator<'_>;
+    async fn keys(&self) -> Self::KeyIterator;
 
     /// Checks if the key is in the store. This is a momentary check that may be invalidated; not
     /// thread safe. It is the responsibility of the owning layer to maintain concurrency safety.
@@ -258,6 +203,7 @@ pub trait Store {
 pub mod test_helpers {
     use super::*;
     use mockall::automock;
+    use std::iter::Cloned;
     use std::vec;
 
     pub struct Store {}
@@ -319,11 +265,7 @@ pub mod test_helpers {
         type Key = i32;
         type Value = i32;
 
-        type KeyRefIterator<'k>
-            = std::iter::Map<vec::IntoIter<&'k i32>, fn(&'k i32) -> Cow<'k, i32>>
-        where
-            <MockStoreWrapper as super::Store>::Key: 'k,
-            Self: 'k;
+        type KeyIterator = vec::IntoIter<i32>;
 
         type FlushResultIterator = vec::IntoIter<CacheBrownsResult<Self::Key>>;
 
@@ -365,8 +307,8 @@ pub mod test_helpers {
             self.inner.flush()
         }
 
-        async fn keys(&self) -> Self::KeyRefIterator<'_> {
-            self.inner.keys().into_cow_iter()
+        async fn keys(&self) -> Self::KeyIterator {
+            self.inner.keys().cloned().collect_vec().into_iter()
         }
 
         async fn contains<Q: Borrow<Self::Key> + Sync>(&self, key: &Q) -> bool {

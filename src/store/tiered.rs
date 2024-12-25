@@ -1,8 +1,7 @@
-use crate::store::CowIterExt;
 use crate::store::Store;
-use crate::{CacheBrownsResult, CowIterator, NestedCowIterator};
-use std::borrow::{Borrow, Cow};
+use crate::CacheBrownsResult;
 use itertools::Itertools;
+use std::borrow::{Borrow, Cow};
 use tokio::sync::RwLock;
 /*
 Tiered works with ripple propagation
@@ -111,16 +110,8 @@ where
 {
     type Key = Tier::Key;
     type Value = Tier::Value;
-    type KeyRefIterator<'k>
-        = std::vec::IntoIter<Cow<'k, Self::Key>>
-        // = NestedCowIterator!('k, <Tier as Store>::Key, Next::KeyRefIterator<'k>)
-    where
-        Self::Key: 'k,
-        Self: 'k;
-    type FlushResultIterator = std::iter::Chain<
-        <Next as Store>::FlushResultIterator,
-        <Tier as Store>::FlushResultIterator,
-    >;
+    type KeyIterator = std::vec::IntoIter<Self::Key>;
+    type FlushResultIterator = std::vec::IntoIter<CacheBrownsResult<Self::Key>>;
 
     async fn get<Q: Borrow<Self::Key> + Sync>(&self, key: &Q) -> Option<Self::Value> {
         let lock = self.inner.read().await;
@@ -224,27 +215,14 @@ where
     async fn flush(&mut self) -> Self::FlushResultIterator {
         let low_tiers = self.next.write().await.flush().await;
         let flushed_here = self.inner.write().await.flush().await;
-        low_tiers.chain(flushed_here)
+        low_tiers.chain(flushed_here).collect_vec().into_iter()
     }
 
-    async fn keys(&self) -> Self::KeyRefIterator<'_> {
+    async fn keys(&self) -> Self::KeyIterator {
         // From an external perspective, store is a monolith. Propagate to lowest (biggest) tier.
         let lock = self.next.read().await;
         let keys = lock.keys().await;
-
-        let mut derp = Vec::new();
-        for key in keys {
-            let cow: Cow<'_, Self::Key> = Cow::Owned(key.into_owned());
-            derp.push(cow)
-        }
-
-        // keys.into_as_owned()
-        //let keys = keys.map(|v| Cow::Owned(v.into_owned()));
-        // keys
-        //let keys: Vec<Cow<'_, Self::Key>> = keys.collect_vec();
-        derp.into_iter()
-        // keys.into_as_owned().collect_vec().into_iter()
-        //map(|v| v.as_owned())
+        keys.collect_vec().into_iter()
     }
 
     async fn contains<Q: Borrow<Self::Key> + Sync>(&self, key: &Q) -> bool {
@@ -259,12 +237,8 @@ where
 {
     type Key = Tier::Key;
     type Value = Tier::Value;
-    type KeyRefIterator<'k>
-        = NestedCowIterator!('k, <Tier as Store>::Key, std::slice::Iter<'k, &'k <Tier as Store>::Key>)
-    where
-        <Tier as Store>::Key: 'k,
-        Self: 'k;
-    type FlushResultIterator = Tier::FlushResultIterator;
+    type KeyIterator = std::vec::IntoIter<<Tier as Store>::Key>;
+    type FlushResultIterator = std::vec::IntoIter<CacheBrownsResult<Self::Key>>;
 
     async fn get<Q: Borrow<Self::Key> + Sync>(&self, key: &Q) -> Option<Self::Value> {
         let lock = self.next.read().await;
@@ -302,13 +276,19 @@ where
     }
 
     async fn flush(&mut self) -> Self::FlushResultIterator {
-        self.next.write().await.flush().await
+        self.next
+            .write()
+            .await
+            .flush()
+            .await
+            .collect_vec()
+            .into_iter()
     }
 
-    async fn keys(&self) -> Self::KeyRefIterator<'_> {
+    async fn keys(&self) -> Self::KeyIterator {
         let next = self.next.read().await;
         let keys = next.keys().await;
-        keys.collect::<Vec<&'_ Self::Key>>().iter()
+        keys.collect_vec().into_iter()
     }
 
     async fn contains<Q: Borrow<Self::Key> + Sync>(&self, key: &Q) -> bool {

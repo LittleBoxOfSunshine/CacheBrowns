@@ -1,6 +1,6 @@
 // This implementation borrows heavily from https://crates.io/crates/lru
 
-use crate::store::{IterExt, Store};
+use crate::store::Store;
 use crate::CacheBrownsResult;
 use itertools::Itertools;
 use std::borrow::{Borrow, Cow};
@@ -141,7 +141,7 @@ where
         // If the data store is non-volatile, there might already be data present. Iterate through
         // the values to build out an arbitrary usage order.
         for key in lru.store.keys().await {
-            lru.add_to_usage_order(key.into_owned());
+            lru.add_to_usage_order(key.clone());
         }
 
         lru.remove_excess_entries().await?;
@@ -276,12 +276,7 @@ where
     type Value = Value;
 
     // Avoid underlying [`keys`] implementation to guarantee an all memory operation.
-    type KeyRefIterator<'k>
-        = std::iter::Map<vec::IntoIter<&'k Key>, fn(&'k Key) -> Cow<'k, Key>>
-    where
-        Key: 'k,
-        Value: 'k,
-        S: 'k;
+    type KeyIterator = vec::IntoIter<Key>;
 
     // Because flush can fail, we can't rely on our own iterator as a potential optimization.
     type FlushResultIterator = S::FlushResultIterator;
@@ -345,17 +340,16 @@ where
         self.store.flush().await
     }
 
-    async fn keys(&self) -> Self::KeyRefIterator<'_> {
+    async fn keys(&self) -> Self::KeyIterator {
         // We can optimize by guaranteeing a memory lookup checking the metadata instead of the
         // underlying store, which may or may not be in memory
         unsafe {
             self.index
                 .borrow()
                 .keys()
-                .map(|k| &*k.key)
+                .map(|k| (*k.key).clone())
                 .collect_vec()
                 .into_iter()
-                .into_cow_iter()
         }
     }
 
@@ -377,7 +371,7 @@ where
 mod tests {
     use crate::store::memory::MemoryStore;
     use crate::store::replacement::lru::{KeyRef, LruReplacement};
-    use crate::store::{CowIterExt, IterExt, Store};
+    use crate::store::Store;
     use crate::CacheBrownsResult;
     use itertools::{assert_equal, Itertools};
     use std::borrow::{Borrow, Cow};
@@ -583,7 +577,7 @@ mod tests {
 
         // Order isn't guaranteed, so just check that exactly one was deleted.
         let index_sum: i32 = store.index.borrow().keys().map(|k| unsafe { *k.key }).sum();
-        let store_sum: i32 = store.store.keys().await.into_owned().sum();
+        let store_sum: i32 = store.store.keys().await.sum();
         assert!(index_sum == 3 || index_sum == 6 || index_sum == 5);
 
         // We picked powers of 2, so checking sum rather than all values is sufficient for equality.
@@ -678,8 +672,8 @@ mod tests {
         }
 
         assert_equal::<BTreeSet<u32>, BTreeSet<u32>>(
-            BTreeSet::from_iter(store.keys().await.into_owned()),
-            BTreeSet::from_iter(store2.keys().await.into_owned()),
+            BTreeSet::from_iter(store.keys().await),
+            BTreeSet::from_iter(store2.keys().await),
         );
     }
 
@@ -719,11 +713,7 @@ mod tests {
     impl Store for FailingMemoryStore {
         type Key = u32;
         type Value = u32;
-        type KeyRefIterator<'k>
-            = std::iter::Map<vec::IntoIter<&'k u32>, fn(&'k u32) -> Cow<'k, u32>>
-        where
-            Self::Key: 'k,
-            Self: 'k;
+        type KeyIterator = vec::IntoIter<u32>;
         type FlushResultIterator = vec::IntoIter<CacheBrownsResult<u32>>;
 
         async fn get<Q: Borrow<Self::Key> + Sync>(&self, _key: &Q) -> Option<Self::Value> {
@@ -764,8 +754,8 @@ mod tests {
             unimplemented!()
         }
 
-        async fn keys(&self) -> Self::KeyRefIterator<'_> {
-            self.vec.iter().collect_vec().into_iter().into_cow_iter()
+        async fn keys(&self) -> Self::KeyIterator {
+            self.vec.iter().cloned().collect_vec().into_iter()
         }
 
         async fn contains<Q: Borrow<Self::Key> + Sync>(&self, _key: &Q) -> bool {

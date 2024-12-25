@@ -1,5 +1,6 @@
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
+use serde_json::map;
 use std::borrow::{Borrow, Cow};
 use std::collections::hash_map::Drain;
 use std::collections::{hash_map, HashMap};
@@ -14,7 +15,7 @@ use uuid::Uuid;
 
 // TODO: Support the notion of versioning?
 
-use crate::store::{IterExt, Store};
+use crate::store::Store;
 use crate::CacheBrownsResult;
 
 /// Stores each element in a unique file, serialized. A single directory is used to represent the
@@ -98,12 +99,7 @@ where
 {
     type Key = Key;
     type Value = Value;
-    type KeyRefIterator<'k>
-        = Map<hash_map::Keys<'k, Key, PathBuf>, fn(&'k Key) -> Cow<'k, Key>>
-    where
-        Key: 'k,
-        Value: 'k,
-        Serde: 'k;
+    type KeyIterator = vec::IntoIter<Key>;
     type FlushResultIterator = vec::IntoIter<CacheBrownsResult<Key>>;
 
     async fn get<Q: Borrow<Key> + Sync>(&self, key: &Q) -> Option<Self::Value> {
@@ -155,8 +151,8 @@ where
     }
 
     //noinspection DuplicatedCode
-    async fn keys(&self) -> Self::KeyRefIterator<'_> {
-        self.index.keys().into_cow_iter()
+    async fn keys(&self) -> Self::KeyIterator {
+        self.index.keys().cloned().collect_vec().into_iter()
     }
 
     async fn contains<Q: Borrow<Self::Key> + Sync>(&self, key: &Q) -> bool {
@@ -233,12 +229,7 @@ where
 {
     type Key = Key;
     type Value = Value;
-    type KeyRefIterator<'k>
-        = Map<hash_map::Keys<'k, Key, PathBuf>, fn(&'k Key) -> Cow<'k, Key>>
-    where
-        Key: 'k,
-        Value: 'k,
-        Serde: 'k;
+    type KeyIterator = vec::IntoIter<Key>;
     type FlushResultIterator = vec::IntoIter<CacheBrownsResult<Key>>;
 
     async fn get<Q: Borrow<Key> + Sync>(&self, key: &Q) -> Option<Self::Value> {
@@ -293,8 +284,8 @@ where
         flush::<Key>(self.index.drain())
     }
 
-    async fn keys(&self) -> Self::KeyRefIterator<'_> {
-        self.index.keys().into_cow_iter()
+    async fn keys(&self) -> Self::KeyIterator {
+        self.index.keys().cloned().collect_vec().into_iter()
     }
 
     async fn contains<Q: Borrow<Self::Key> + Sync>(&self, key: &Q) -> bool {
@@ -333,7 +324,8 @@ where
     Key: Eq + Hash,
 {
     if let Some((key, path)) = index.remove_entry(key) {
-        fs::remove_file(path).map_err(Box::new)?;
+        fs::remove_file(path)
+            .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + 'static>)?;
         return Ok(Some(key));
     }
 
@@ -367,7 +359,11 @@ where
 fn flush<Key>(records: Drain<'_, Key, PathBuf>) -> vec::IntoIter<CacheBrownsResult<Key>> {
     records
         .into_iter()
-        .map(|(k, path)| fs::remove_file(path).map(|_| k).map_err(|e| e.into()))
+        .map(|(k, path)| {
+            fs::remove_file(path)
+                .map(|_| k)
+                .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + 'static>)
+        })
         .collect_vec()
         .into_iter()
 }
@@ -435,7 +431,8 @@ where
     for<'a> Value: Serialize + Deserialize<'a>,
 {
     fn serialize(buffered_writer: BufWriter<File>, value: &Value) -> CacheBrownsResult<()> {
-        Ok(serde_json::to_writer(buffered_writer, &value).map_err(Box::new)?)
+        Ok(serde_json::to_writer(buffered_writer, &value)
+            .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + 'static>)?)
     }
 
     fn deserialize(buffered_reader: BufReader<File>) -> Option<Value> {
@@ -456,7 +453,8 @@ where
     for<'a> Value: Serialize + Deserialize<'a>,
 {
     fn serialize(buffered_writer: BufWriter<File>, value: &Value) -> CacheBrownsResult<()> {
-        Ok(bincode::serialize_into(buffered_writer, &value).map_err(Box::new)?)
+        Ok(bincode::serialize_into(buffered_writer, &value)
+            .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + 'static>)?)
     }
 
     fn deserialize(buffered_reader: BufReader<File>) -> Option<Value> {
@@ -625,7 +623,7 @@ mod tests {
             assert_eq!(2, $store.keys().await.count());
 
             $store.put(45, 50).await.unwrap();
-            let keys: BTreeSet<u32> = $store.keys().await.map(|k| k.into_owned()).collect();
+            let keys: BTreeSet<u32> = $store.keys().await.collect();
             assert!(keys.contains(&42));
             assert!(keys.contains(&45));
             assert_eq!(2, keys.len());
@@ -636,11 +634,6 @@ mod tests {
     async fn keys() {
         validate_against_volatile(|mut store, dir| async move {
             let _dir = dir;
-            let keys: BTreeSet<u32> = store.keys().await.map(|k| k.into_owned()).collect();
-            assert!(keys.contains(&42));
-            assert!(keys.contains(&45));
-            assert_eq!(2, keys.len());
-
             keys!(store);
         })
         .await;

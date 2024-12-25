@@ -1,5 +1,5 @@
 use crate::store::Store;
-use crate::{CacheBrownsResult, CowIterator};
+use crate::CacheBrownsResult;
 use itertools::Itertools;
 use std::borrow::{Borrow, Cow};
 use std::collections::{hash_map, HashMap};
@@ -30,13 +30,7 @@ impl<Key: Clone + Eq + std::hash::Hash + Send + Sync, Value: Clone + Send + Sync
 {
     type Key = Key;
     type Value = Value;
-    type KeyRefIterator<'k>
-        //= std::iter::Map<hash_map::Keys<'k, Key, Value>, fn(<hash_map::Keys<'k, Key, Value> as std::iter::Iterator>::Item) -> std::borrow::Cow<'k, <hash_map::Keys<'k, Key, Value> as std::iter::Iterator>::Item>>
-        = CowIterator!('k, Key, hash_map::Keys<'k, Key, Value>)
-        // = std::iter::Map<hash_map::Keys<'k, Key, Value>, fn(&'k Key) -> Cow<'k, Key>>
-    where
-        Key: 'k,
-        Value: 'k;
+    type KeyIterator = vec::IntoIter<Key>;
     type FlushResultIterator = vec::IntoIter<CacheBrownsResult<Key>>;
 
     async fn get<Q: Borrow<Key> + Sync>(&self, key: &Q) -> Option<Self::Value> {
@@ -81,8 +75,8 @@ impl<Key: Clone + Eq + std::hash::Hash + Send + Sync, Value: Clone + Send + Sync
             .into_iter()
     }
 
-    async fn keys(&self) -> Self::KeyRefIterator<'_> {
-        self.data.keys().map(|k| Cow::Borrowed(k))
+    async fn keys(&self) -> Self::KeyIterator {
+        self.data.keys().cloned().collect_vec().into_iter()
     }
 
     async fn contains<Q: Borrow<Self::Key> + Sync>(&self, key: &Q) -> bool {

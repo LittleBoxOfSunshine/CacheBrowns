@@ -4,4 +4,4 @@
 pub mod store;
 
 /// Result with type erasure for propagating arbitrary errors.
-pub type CacheBrownsResult<T> = Result<T, Box<dyn std::error::Error>>;
+pub type CacheBrownsResult<T> = Result<T, Box<dyn std::error::Error + Send>>;
