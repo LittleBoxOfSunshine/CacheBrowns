@@ -1,8 +1,8 @@
 use crate::store::Store;
 use crate::CacheBrownsResult;
 use itertools::Itertools;
-use std::borrow::{Borrow, Cow};
-use std::collections::{hash_map, HashMap};
+use std::borrow::Borrow;
+use std::collections::HashMap;
 use std::vec;
 
 /// A [`MemoryStore`] is a wrapper around [`HashMap`] that satisfies [`Store`].

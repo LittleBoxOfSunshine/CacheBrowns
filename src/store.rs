@@ -1,6 +1,5 @@
 use crate::CacheBrownsResult;
-use itertools::Itertools;
-use std::borrow::{Borrow, Cow};
+use std::borrow::Borrow;
 // TODO: Now that the lifetimes are gone, automock should work without all the double structures.s
 
 pub mod discrete_files;
@@ -203,7 +202,8 @@ pub trait Store {
 pub mod test_helpers {
     use super::*;
     use mockall::automock;
-    use std::iter::Cloned;
+
+    use itertools::Itertools;
     use std::vec;
 
     pub struct Store {}

@@ -1,7 +1,7 @@
 use crate::store::Store;
 use crate::CacheBrownsResult;
 use itertools::Itertools;
-use std::borrow::{Borrow, Cow};
+use std::borrow::Borrow;
 use tokio::sync::RwLock;
 /*
 Tiered works with ripple propagation
@@ -246,11 +246,11 @@ where
     }
 
     async fn poke<Q: Borrow<Self::Key> + Sync>(&self, key: &Q) {
-        unsafe { (*self.next.read().await).poke(key).await }
+        (*self.next.read().await).poke(key).await
     }
 
     async fn peek<Q: Borrow<Self::Key> + Sync>(&self, key: &Q) -> Option<Self::Value> {
-        unsafe { (*self.next.read().await).peek(key).await }
+        (*self.next.read().await).peek(key).await
     }
 
     async fn put(&mut self, key: Self::Key, value: Self::Value) -> CacheBrownsResult<()> {

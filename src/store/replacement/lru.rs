@@ -3,7 +3,7 @@
 use crate::store::Store;
 use crate::CacheBrownsResult;
 use itertools::Itertools;
-use std::borrow::{Borrow, Cow};
+use std::borrow::Borrow;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
@@ -374,7 +374,7 @@ mod tests {
     use crate::store::Store;
     use crate::CacheBrownsResult;
     use itertools::{assert_equal, Itertools};
-    use std::borrow::{Borrow, Cow};
+    use std::borrow::Borrow;
     use std::collections::BTreeSet;
     use std::fmt::Debug;
     use std::hash::Hash;
