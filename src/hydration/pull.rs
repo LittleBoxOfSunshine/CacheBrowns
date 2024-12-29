@@ -33,13 +33,12 @@ where
     ) -> Option<CacheLookupSuccess<Self::Value>> {
         match self.store.get(key).await {
             Some(value) => {
-                let value = value.into_owned();
                 self.try_use_cached_value(key.borrow(), value).await
             }
             None => match self.data_source.retrieve(key) {
                 Some(value) => {
                     // TODO: During telemetry pass, consider making this not silent
-                    let _ = self.store.put(key.borrow().clone(), value.clone());
+                    let _ = self.store.put(key.borrow().clone(), value.clone()).await;
                     Some(CacheLookupSuccess::new(StoreResult::NotFound, true, value))
                 }
                 None => None,
@@ -81,7 +80,7 @@ where
             match self.data_source.retrieve_with_hint(key, &value) {
                 Some(new_value) => {
                     // TODO: During telemetry pass, consider making this not silent
-                    let _ = self.store.put((*key).clone(), new_value.clone());
+                    let _ = self.store.put((*key).clone(), new_value.clone()).await;
                     Some(CacheLookupSuccess::new(
                         StoreResult::Invalid,
                         true,
@@ -100,7 +99,6 @@ mod tests {
     use crate::hydration::{CacheLookupSuccess, Hydrator};
     use crate::source_of_record::test_helpers::{MockSor, MockSorWrapper};
     use crate::store::test_helpers::{MockStore, MockStoreWrapper};
-    use std::borrow::Cow;
     use std::vec;
 
     fn base_fakes() -> (MockStore, MockSor) {
@@ -111,7 +109,7 @@ mod tests {
     async fn not_found_retrieves_valid_and_hydrates() {
         let (mut store, mut data_source) = base_fakes();
         store.expect_get().return_const(None);
-        store.expect_get().return_const(Some(Cow::Owned(42)));
+        store.expect_get().return_const(Some(42));
         // Validate hydration occurred.
         store
             .expect_put()
@@ -149,7 +147,7 @@ mod tests {
         store
             .expect_get()
             .times(3)
-            .return_const(Some(Cow::Owned(42)));
+            .return_const(Some(42));
 
         data_source.expect_is_valid().once().return_const(true);
 

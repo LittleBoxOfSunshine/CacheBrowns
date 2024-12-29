@@ -1,5 +1,5 @@
 use crate::CacheBrownsResult;
-use interruptible_polling::SelfUpdatingPollingTask;
+use interruptible_polling::tokio::{PollingTaskBuilder, PollingTaskHandle, TaskChecker};
 use itertools::Itertools;
 use std::borrow::Borrow;
 use std::sync::Arc;
@@ -28,7 +28,7 @@ where
     shared_inner_state: Arc<InnerState<S, Sor>>,
     // We can't know if the underlying store is volatile, clean exit property of PollingTask
     // increases probability of maintaining data integrity.
-    _polling_thread: SelfUpdatingPollingTask,
+    _polling_thread: PollingTaskHandle,
 }
 
 struct InnerState<S, Sor>
@@ -48,47 +48,35 @@ where
     Sor: SourceOfRecord<Key = S::Key, Value = S::Value> + Send + Sync + 'static,
 {
     pub fn new(data_source: Sor, store: S, polling_interval: Duration) -> Self {
-        Self::new_self_updating(data_source, store, polling_interval, |_| ())
-    }
-
-    pub fn new_self_updating<F>(
-        data_source: Sor,
-        store: S,
-        polling_interval: Duration,
-        interval_updater: F,
-    ) -> Self
-    where
-        F: Fn(&mut Duration) + Send + 'static,
-    {
         let shared_state = Arc::new(InnerState {
             data_source,
             store: RwLock::from(store),
         });
 
+        // TODO: Consider integration with the try to wait feature. This should probably have an abstraction to make easier to consume via propagation. Some sort of token returned (could be as simple as a type alias for the future).
         Self {
             shared_inner_state: shared_state.clone(),
-            _polling_thread: SelfUpdatingPollingTask::new_with_checker(
-                polling_interval,
-                move |interval, checker| {
-                    Self::poll(&shared_state, checker);
-                    interval_updater(interval);
-                },
-            ),
+            _polling_thread: PollingTaskBuilder::new(polling_interval)
+                .task_with_checker(move |checker| {
+                    let shared_state_clone = shared_state.clone();
+                    async move {
+                        Self::poll(&shared_state_clone, checker).await;
+                    }
+                })
         }
     }
 
-    async fn poll(shared_inner_state: &Arc<InnerState<S, Sor>>, checker: &dyn Fn() -> bool) {
+    async fn poll(shared_inner_state: &Arc<InnerState<S, Sor>>, checker: TaskChecker) {
         let keys: Vec<S::Key> = shared_inner_state
             .store
             .read()
             .await
             .keys()
             .await
-            .cloned()
             .collect_vec();
 
         for key in keys {
-            if !checker() {
+            if !checker.is_running() {
                 break;
             }
 
@@ -98,8 +86,7 @@ where
                 .read()
                 .await
                 .peek(&key)
-                .await
-                .map(|v| v.into_owned());
+                .await;
 
             // If value was deleted since pulling keys, don't issue a superfluous retrieve.
             if let Some(value) = peeked_value {
@@ -169,7 +156,7 @@ where
                     StoreResult::Invalid
                 },
                 false,
-                value.into_owned(),
+                value,
             )),
         }
     }
@@ -192,7 +179,6 @@ mod tests {
     use crate::hydration::{CacheLookupSuccess, Hydrator};
     use crate::source_of_record::test_helpers::{MockSor, MockSorWrapper};
     use crate::store::test_helpers::{MockStore, MockStoreWrapper};
-    use std::borrow::Cow;
     use std::time::Duration;
 
     const CONTINUOUS: Duration = Duration::from_secs(0);
@@ -200,26 +186,6 @@ mod tests {
 
     fn base_fakes() -> (MockStore, MockSor) {
         (MockStore::new(), MockSor::new())
-    }
-
-    #[tokio::test]
-    async fn self_updating_constructs() {
-        // This is reusing library code, so just confirm that things construct and destruct.
-        let (mut store, data_source) = base_fakes();
-
-        store.expect_keys().return_const(vec![].into_iter());
-        store.expect_peek().return_const(None);
-
-        let _polling = PollingHydrator::new_self_updating(
-            MockSorWrapper::new(data_source),
-            MockStoreWrapper::new(store),
-            CONTINUOUS,
-            |interval| {
-                *interval = CONTINUOUS;
-            },
-        );
-        // Arbitrary time to let things run for before interrupting via drop.
-        std::thread::sleep(Duration::from_millis(200));
     }
 
     #[tokio::test]
@@ -262,8 +228,8 @@ mod tests {
         let (mut store, mut data_source) = base_fakes();
 
         store.expect_keys().return_const(vec![&32].into_iter());
-        store.expect_peek().return_const(Some(Cow::Owned(42)));
-        store.expect_get().return_const(Some(Cow::Owned(42)));
+        store.expect_peek().return_const(Some(42));
+        store.expect_get().return_const(Some(42));
         data_source
             .expect_is_valid()
             .once()
