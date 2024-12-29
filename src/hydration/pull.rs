@@ -3,6 +3,7 @@ use crate::source_of_record::SourceOfRecord;
 use crate::store::Store;
 use crate::CacheBrownsResult;
 use std::borrow::Borrow;
+use tokio::sync::RwLock;
 
 /// [`PullHydrator`] hydrates the cache by immediately calling out to the [`SourceOfRecord`]
 /// any time data is missing or stale to attempt to provide current data.
@@ -12,7 +13,7 @@ use std::borrow::Borrow;
 /// provided [`SourceOfRecord`] must internally enforce this logic. See [`crate::source_of_record::concurrent`]
 /// for generic wrappers.
 pub struct PullHydrator<S, Sor> {
-    store: S,
+    store: RwLock<S>,
     data_source: Sor,
 }
 
@@ -20,7 +21,7 @@ impl<K, V, S, Sor> Hydrator for PullHydrator<S, Sor>
 where
     K: Clone + Send + Sync,
     V: Clone + Send + Sync,
-    S: Store<Key = K, Value = V>,
+    S: Store<Key = K, Value = V> + Send + Sync,
     Sor: SourceOfRecord<Key = K, Value = V>,
 {
     type Key = K;
@@ -28,17 +29,18 @@ where
     type FlushResultIterator = S::FlushResultIterator;
 
     async fn get<Q: Borrow<Self::Key> + Sync>(
-        &mut self,
+        &self,
         key: &Q,
     ) -> Option<CacheLookupSuccess<Self::Value>> {
-        match self.store.get(key).await {
+        let value = self.store.read().await.get(key).await;
+        match value {
             Some(value) => {
                 self.try_use_cached_value(key.borrow(), value).await
             }
             None => match self.data_source.retrieve(key) {
                 Some(value) => {
                     // TODO: During telemetry pass, consider making this not silent
-                    let _ = self.store.put(key.borrow().clone(), value.clone()).await;
+                    let _ = self.store.write().await.put(key.borrow().clone(), value.clone()).await;
                     Some(CacheLookupSuccess::new(StoreResult::NotFound, true, value))
                 }
                 None => None,
@@ -46,12 +48,12 @@ where
         }
     }
 
-    async fn flush(&mut self) -> Self::FlushResultIterator {
-        self.store.flush().await
+    async fn flush(&self) -> Self::FlushResultIterator {
+        self.store.write().await.flush().await
     }
 
-    async fn stop_tracking<Q: Borrow<Self::Key> + Sync>(&mut self, key: &Q) -> CacheBrownsResult<()> {
-        match self.store.delete(key).await {
+    async fn stop_tracking<Q: Borrow<Self::Key> + Sync>(&self, key: &Q) -> CacheBrownsResult<()> {
+        match self.store.write().await.delete(key).await {
             Ok(_) => Ok(()),
             Err(e) => Err(e),
         }
@@ -66,11 +68,12 @@ where
     Sor: SourceOfRecord<Key = Key, Value = Value>,
 {
     pub fn new(store: S, data_source: Sor) -> Self {
+        let store = RwLock::new(store);
         Self { store, data_source }
     }
 
     async fn try_use_cached_value(
-        &mut self,
+        &self,
         key: &Key,
         value: Value,
     ) -> Option<CacheLookupSuccess<Value>> {
@@ -80,7 +83,7 @@ where
             match self.data_source.retrieve_with_hint(key, &value) {
                 Some(new_value) => {
                     // TODO: During telemetry pass, consider making this not silent
-                    let _ = self.store.put((*key).clone(), new_value.clone()).await;
+                    let _ = self.store.write().await.put((*key).clone(), new_value.clone()).await;
                     Some(CacheLookupSuccess::new(
                         StoreResult::Invalid,
                         true,
@@ -168,7 +171,7 @@ mod tests {
 
         let store = MockStoreWrapper::new(store);
         let data_source = MockSorWrapper::new(data_source);
-        let mut hydrator = PullHydrator::new(store, data_source);
+        let hydrator = PullHydrator::new(store, data_source);
 
         assert_eq!(Some(CacheLookupSuccess::Hit(42)), hydrator.get(&42).await);
 
@@ -187,7 +190,7 @@ mod tests {
 
         let store = MockStoreWrapper::new(store);
         let data_source = MockSorWrapper::new(data_source);
-        let mut hydrator = PullHydrator::new(store, data_source);
+        let hydrator = PullHydrator::new(store, data_source);
         assert_eq!(0, hydrator.flush().await.len());
     }
 
@@ -204,7 +207,7 @@ mod tests {
 
         let store = MockStoreWrapper::new(store);
         let data_source = MockSorWrapper::new(data_source);
-        let mut hydrator = PullHydrator::new(store, data_source);
+        let hydrator = PullHydrator::new(store, data_source);
 
         hydrator.stop_tracking(&42).await.unwrap()
     }

@@ -118,7 +118,7 @@ where
     type FlushResultIterator = S::FlushResultIterator;
 
     async fn get<Q: Borrow<Self::Key> + Sync>(
-        &mut self,
+        &self,
         key: &Q,
     ) -> Option<CacheLookupSuccess<Value>> {
         let read_lock = self.shared_inner_state.store.read().await;
@@ -161,11 +161,11 @@ where
         }
     }
 
-    async fn flush(&mut self) -> Self::FlushResultIterator {
+    async fn flush(&self) -> Self::FlushResultIterator {
         self.shared_inner_state.store.write().await.flush().await
     }
 
-    async fn stop_tracking<Q: Borrow<Self::Key> + Sync>(&mut self, key: &Q) -> CacheBrownsResult<()> {
+    async fn stop_tracking<Q: Borrow<Self::Key> + Sync>(&self, key: &Q) -> CacheBrownsResult<()> {
         match self.shared_inner_state.store.write().await.delete(key).await {
             Ok(_) => Ok(()),
             Err(e) => Err(e),
@@ -198,7 +198,7 @@ mod tests {
         store.expect_put().once().returning(|_, _| Ok(()));
         data_source.expect_retrieve().return_const(Some(42));
 
-        let mut polling = PollingHydrator::new(
+        let polling = PollingHydrator::new(
             MockSorWrapper::new(data_source),
             MockStoreWrapper::new(store),
             CONTINUOUS,
@@ -215,7 +215,7 @@ mod tests {
         store.expect_get().return_const(None);
         data_source.expect_retrieve().return_const(None);
 
-        let mut polling = PollingHydrator::new(
+        let polling = PollingHydrator::new(
             MockSorWrapper::new(data_source),
             MockStoreWrapper::new(store),
             CONTINUOUS,
@@ -240,7 +240,7 @@ mod tests {
             .withf(|k, v| k == &32 && *v == 42)
             .return_const(false);
 
-        let mut polling = PollingHydrator::new(
+        let polling = PollingHydrator::new(
             MockSorWrapper::new(data_source),
             MockStoreWrapper::new(store),
             NEVER,

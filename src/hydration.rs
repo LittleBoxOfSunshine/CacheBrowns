@@ -23,13 +23,13 @@ pub trait Hydrator {
     // Is it already the case in some other respect though? Is the ref based version and more
     // cumbersome than any existing instances?
     async fn get<Q: Borrow<Self::Key> + Sync>(
-        &mut self,
+        &self,
         key: &Q,
     ) -> Option<CacheLookupSuccess<Self::Value>>;
 
-    async fn flush(&mut self) -> Self::FlushResultIterator;
+    async fn flush(&self) -> Self::FlushResultIterator;
 
-    async fn stop_tracking<Q: Borrow<Self::Key> + Sync>(&mut self, key: &Q) -> CacheBrownsResult<()>;
+    async fn stop_tracking<Q: Borrow<Self::Key> + Sync>(&self, key: &Q) -> CacheBrownsResult<()>;
 }
 
 #[derive(Debug, Eq, PartialEq)]
