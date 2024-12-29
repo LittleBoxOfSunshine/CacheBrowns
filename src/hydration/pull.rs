@@ -1,7 +1,9 @@
-use crate::hydration::{CacheLookupSuccess, Hydrator, StoreResult};
-use crate::source_of_record::SourceOfRecord;
-use crate::store::Store;
-use crate::CacheBrownsResult;
+use crate::{
+    hydration::{CacheLookupSuccess, Hydrator, StoreResult},
+    source_of_record::SourceOfRecord,
+    store::Store,
+    CacheBrownsResult,
+};
 use std::borrow::Borrow;
 use tokio::sync::RwLock;
 
@@ -22,7 +24,7 @@ where
     K: Clone + Send + Sync,
     V: Clone + Send + Sync,
     S: Store<Key = K, Value = V> + Send + Sync,
-    Sor: SourceOfRecord<Key = K, Value = V>,
+    Sor: SourceOfRecord<Key = K, Value = V> + Send + Sync,
 {
     type Key = K;
     type Value = V;
@@ -34,13 +36,16 @@ where
     ) -> Option<CacheLookupSuccess<Self::Value>> {
         let value = self.store.read().await.get(key).await;
         match value {
-            Some(value) => {
-                self.try_use_cached_value(key.borrow(), value).await
-            }
-            None => match self.data_source.retrieve(key) {
+            Some(value) => self.try_use_cached_value(key.borrow(), value).await,
+            None => match self.data_source.retrieve(key).await {
                 Some(value) => {
                     // TODO: During telemetry pass, consider making this not silent
-                    let _ = self.store.write().await.put(key.borrow().clone(), value.clone()).await;
+                    let _ = self
+                        .store
+                        .write()
+                        .await
+                        .put(key.borrow().clone(), value.clone())
+                        .await;
                     Some(CacheLookupSuccess::new(StoreResult::NotFound, true, value))
                 }
                 None => None,
@@ -63,9 +68,9 @@ where
 impl<Key, Value, S, Sor> PullHydrator<S, Sor>
 where
     Key: Clone + Send + Sync,
-    Value: Clone,
+    Value: Clone + Send + Sync,
     S: Store<Key = Key, Value = Value>,
-    Sor: SourceOfRecord<Key = Key, Value = Value>,
+    Sor: SourceOfRecord<Key = Key, Value = Value> + Send + Sync,
 {
     pub fn new(store: S, data_source: Sor) -> Self {
         let store = RwLock::new(store);
@@ -77,13 +82,18 @@ where
         key: &Key,
         value: Value,
     ) -> Option<CacheLookupSuccess<Value>> {
-        if self.data_source.is_valid(key, &value) {
+        if self.data_source.is_valid(key, &value).await {
             Some(CacheLookupSuccess::new(StoreResult::Valid, false, value))
         } else {
-            match self.data_source.retrieve_with_hint(key, &value) {
+            match self.data_source.retrieve_with_hint(key, &value).await {
                 Some(new_value) => {
                     // TODO: During telemetry pass, consider making this not silent
-                    let _ = self.store.write().await.put((*key).clone(), new_value.clone()).await;
+                    let _ = self
+                        .store
+                        .write()
+                        .await
+                        .put((*key).clone(), new_value.clone())
+                        .await;
                     Some(CacheLookupSuccess::new(
                         StoreResult::Invalid,
                         true,
@@ -98,10 +108,11 @@ where
 
 #[cfg(test)]
 mod tests {
-    use crate::hydration::pull::PullHydrator;
-    use crate::hydration::{CacheLookupSuccess, Hydrator};
-    use crate::source_of_record::test_helpers::{MockSor, MockSorWrapper};
-    use crate::store::test_helpers::{MockStore, MockStoreWrapper};
+    use crate::{
+        hydration::{pull::PullHydrator, CacheLookupSuccess, Hydrator},
+        source_of_record::test_helpers::{MockSor, MockSorWrapper},
+        store::test_helpers::{MockStore, MockStoreWrapper},
+    };
     use std::vec;
 
     fn base_fakes() -> (MockStore, MockSor) {
@@ -147,10 +158,7 @@ mod tests {
     #[tokio::test]
     async fn found_returns_with_proper_metadata() {
         let (mut store, mut data_source) = base_fakes();
-        store
-            .expect_get()
-            .times(3)
-            .return_const(Some(42));
+        store.expect_get().times(3).return_const(Some(42));
 
         data_source.expect_is_valid().once().return_const(true);
 

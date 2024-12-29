@@ -1,20 +1,21 @@
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
-use std::borrow::Borrow;
-use std::collections::hash_map::Drain;
-use std::collections::HashMap;
-use std::fmt::Debug;
-use std::fs::File;
-use std::hash::Hash;
-use std::io::{BufReader, BufWriter, Error, ErrorKind};
-use std::path::{Path, PathBuf};
-use std::{fs, vec};
+use std::{
+    borrow::Borrow,
+    collections::{hash_map::Drain, HashMap},
+    fmt::Debug,
+    fs,
+    fs::File,
+    hash::Hash,
+    io::{BufReader, BufWriter, Error, ErrorKind},
+    path::{Path, PathBuf},
+    vec,
+};
 use uuid::Uuid;
 
 // TODO: Support the notion of versioning?
 
-use crate::store::Store;
-use crate::CacheBrownsResult;
+use crate::{store::Store, CacheBrownsResult};
 
 /// Stores each element in a unique file, serialized. A single directory is used to represent the
 /// store. No other files are permitted to be co-located in the directory. Violating this requirement
@@ -148,7 +149,7 @@ where
         flush::<Key>(self.index.drain())
     }
 
-    //noinspection DuplicatedCode
+    // noinspection DuplicatedCode
     async fn keys(&self) -> Self::KeyIterator {
         self.index.keys().cloned().collect_vec().into_iter()
     }
@@ -471,18 +472,22 @@ pub type DiscreteFileStoreVolatileJson<Key, Value> =
 
 #[cfg(test)]
 mod tests {
-    use crate::store::discrete_files::{
-        DiscreteFileStoreNonVolatile, DiscreteFileStoreNonVolatileJson,
-        DiscreteFileStoreVolatileJson, JsonDiscreteFileSerializerDeserializer, Record,
+    use crate::store::{
+        discrete_files::{
+            DiscreteFileStoreNonVolatile, DiscreteFileStoreNonVolatileJson,
+            DiscreteFileStoreVolatileJson, JsonDiscreteFileSerializerDeserializer, Record,
+        },
+        Store,
     };
-    use crate::store::Store;
     use serde::{Deserialize, Serialize};
-    use std::collections::BTreeSet;
-    use std::fs;
-    use std::fs::File;
-    use std::future::Future;
-    use std::io::{Error, ErrorKind, Write};
-    use std::path::PathBuf;
+    use std::{
+        collections::BTreeSet,
+        fs,
+        fs::File,
+        future::Future,
+        io::{Error, ErrorKind, Write},
+        path::PathBuf,
+    };
     use tempdir::TempDir;
 
     const VALID_DATA1_KEY: u32 = 42;

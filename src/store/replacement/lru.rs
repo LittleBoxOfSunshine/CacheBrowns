@@ -1,16 +1,18 @@
 // This implementation borrows heavily from https://crates.io/crates/lru
 
-use crate::store::Store;
-use crate::CacheBrownsResult;
+use crate::{store::Store, CacheBrownsResult};
 use itertools::Itertools;
-use std::borrow::Borrow;
-use std::cell::RefCell;
-use std::collections::HashMap;
-use std::hash::{Hash, Hasher};
-use std::mem::MaybeUninit;
-use std::num::NonZeroUsize;
-use std::ptr::NonNull;
-use std::{ptr, vec};
+use std::{
+    borrow::Borrow,
+    cell::RefCell,
+    collections::HashMap,
+    hash::{Hash, Hasher},
+    mem::MaybeUninit,
+    num::NonZeroUsize,
+    ptr,
+    ptr::NonNull,
+    vec,
+};
 
 #[derive(Eq, Debug)]
 struct KeyRef<Key>
@@ -369,18 +371,19 @@ where
 
 #[cfg(test)]
 mod tests {
-    use crate::store::memory::MemoryStore;
-    use crate::store::replacement::lru::{KeyRef, LruReplacement};
-    use crate::store::Store;
-    use crate::CacheBrownsResult;
+    use crate::{
+        store::{
+            memory::MemoryStore,
+            replacement::lru::{KeyRef, LruReplacement},
+            Store,
+        },
+        CacheBrownsResult,
+    };
     use itertools::{assert_equal, Itertools};
-    use std::borrow::Borrow;
-    use std::collections::BTreeSet;
-    use std::fmt::Debug;
-    use std::hash::Hash;
-    use std::io::ErrorKind;
-    use std::num::NonZeroUsize;
-    use std::{ptr, vec};
+    use std::{
+        borrow::Borrow, collections::BTreeSet, fmt::Debug, hash::Hash, io::ErrorKind,
+        num::NonZeroUsize, ptr, vec,
+    };
 
     async fn lru(max_capacity: usize) -> LruReplacement<u32, u32, MemoryStore<u32, u32>> {
         let store = MemoryStore::new();

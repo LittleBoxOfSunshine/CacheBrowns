@@ -1,11 +1,15 @@
-use crate::hydration::{CacheLookupSuccess, Hydrator};
-use crate::managed_cache::CacheLookupFailure::NotFound;
-use crate::CacheBrownsResult;
-use std::borrow::Borrow;
-use std::future::Future;
-use std::pin::Pin;
-use std::sync::Arc;
-use std::task::{Context, Poll};
+use crate::{
+    hydration::{CacheLookupSuccess, Hydrator},
+    managed_cache::CacheLookupFailure::NotFound,
+    CacheBrownsResult,
+};
+use std::{
+    borrow::Borrow,
+    future::Future,
+    pin::Pin,
+    sync::Arc,
+    task::{Context, Poll},
+};
 use thiserror::Error;
 
 #[derive(Error, Debug)]
@@ -26,8 +30,7 @@ pub enum InvalidCacheEntryBehavior {
     ReturnStale,
 }
 
-pub struct ManagedCache<H>
-{
+pub struct ManagedCache<H> {
     hydrator: Arc<H>,
     when_invalid: InvalidCacheEntryBehavior,
 }
@@ -103,27 +106,17 @@ where
     }
 }
 
-// struct ManagedCacheFuture;
-//
-// impl Future for ManagedCacheFuture {
-//     type Item = CacheLookupSuccess<Value>;
-//     type Error = CacheLookupFailure;
-//
-//     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-//         todo!()
-//     }
-// }
-
-impl<'a, Key, Value, H> tower_service::Service<Key> for ManagedCache<H>
+impl<Key, Value, H> tower_service::Service<Key> for ManagedCache<H>
 where
     Key: Clone + Send + Sync + 'static,
-    Value: From<CacheLookupSuccess<Value>> + Clone + 'a,
+    Value: From<CacheLookupSuccess<Value>> + Clone,
     H: Hydrator<Key = Key, Value = Value> + Sync + 'static,
 {
     type Response = CacheLookupSuccess<Value>;
     type Error = CacheLookupFailure;
 
-    type Future = Pin<Box<dyn Future<Output=Result<Self::Response, Self::Error>> + Send + 'static>>;
+    type Future =
+        Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send + 'static>>;
 
     fn poll_ready(&mut self, _cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         // TODO: There's likely a good opportunity to integrate this to pass through to the source of record, where this concept will typically exist.
@@ -133,8 +126,6 @@ where
     fn call(&mut self, req: Key) -> Self::Future {
         let mut cache = (*self).clone();
 
-        Box::pin(async move {
-            cache.get(&req).await
-        })
+        Box::pin(async move { cache.get(&req).await })
     }
 }

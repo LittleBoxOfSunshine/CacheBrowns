@@ -1,18 +1,15 @@
-use crate::store::Store;
-use crate::CacheBrownsResult;
+use crate::{store::Store, CacheBrownsResult};
 use itertools::Itertools;
 use std::borrow::Borrow;
 use tokio::sync::RwLock;
-/*
-Tiered works with ripple propagation
-So, if you want an LRU 2 tier (for scenario where you really just
-want memory cache that can persist between boots) you would do:
-Lru<Tiered<Mem,Disk
-
-Whereas if you want a true "tiered cache" like in a CPU, where the
-memory cache is smaller than the disk cache you would do:
-Tiered<Lru<Mem>,Disk
- */
+// Tiered works with ripple propagation
+// So, if you want an LRU 2 tier (for scenario where you really just
+// want memory cache that can persist between boots) you would do:
+// Lru<Tiered<Mem,Disk
+//
+// Whereas if you want a true "tiered cache" like in a CPU, where the
+// memory cache is smaller than the disk cache you would do:
+// Tiered<Lru<Mem>,Disk
 
 /// Determines if and how side effects should propagate through the [`Store`] tiers.
 #[derive(Clone)]
@@ -297,13 +294,13 @@ where
     }
 }
 
-// TODO: Consider converting from struct to enum
-
 #[cfg(test)]
 mod tests {
-    use crate::store::memory::MemoryStore;
-    use crate::store::tiered::{RippleMode, TieredStore};
-    use crate::store::Store;
+    use crate::store::{
+        memory::MemoryStore,
+        tiered::{RippleMode, TieredStore},
+        Store,
+    };
 
     #[tokio::test]
     async fn happy_path() {

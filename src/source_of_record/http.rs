@@ -1,7 +1,7 @@
-//use crate::source_of_record::SourceOfRecord;
+// use crate::source_of_record::SourceOfRecord;
 
 // /// Implements an HTTP [`SourceOfRecord`] that respects cache control headers.
-//pub struct HttpDataSourceOfRecord {}
+// pub struct HttpDataSourceOfRecord {}
 
 // TODO: Implement the HTTP standard, decide how best to abstract this out independent of a particular client library
 // impl HttpDataSourceOfRecord {}

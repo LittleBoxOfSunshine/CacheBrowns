@@ -1,6 +1,5 @@
 use crate::CacheBrownsResult;
 use std::borrow::Borrow;
-// TODO: Now that the lifetimes are gone, automock should work without all the double structures.s
 
 pub mod discrete_files;
 pub mod memory;

@@ -1,13 +1,10 @@
 use crate::CacheBrownsResult;
 use interruptible_polling::tokio::{PollingTaskBuilder, PollingTaskHandle, TaskChecker};
 use itertools::Itertools;
-use std::borrow::Borrow;
-use std::sync::Arc;
-use std::time::Duration;
+use std::{borrow::Borrow, sync::Arc, time::Duration};
 use tokio::sync::RwLock;
 
-use crate::source_of_record::SourceOfRecord;
-use crate::store::Store;
+use crate::{source_of_record::SourceOfRecord, store::Store};
 
 use super::{CacheLookupSuccess, Hydrator, StoreResult};
 
@@ -56,13 +53,14 @@ where
         // TODO: Consider integration with the try to wait feature. This should probably have an abstraction to make easier to consume via propagation. Some sort of token returned (could be as simple as a type alias for the future).
         Self {
             shared_inner_state: shared_state.clone(),
-            _polling_thread: PollingTaskBuilder::new(polling_interval)
-                .task_with_checker(move |checker| {
+            _polling_thread: PollingTaskBuilder::new(polling_interval).task_with_checker(
+                move |checker| {
                     let shared_state_clone = shared_state.clone();
                     async move {
                         Self::poll(&shared_state_clone, checker).await;
                     }
-                })
+                },
+            ),
         }
     }
 
@@ -81,12 +79,7 @@ where
             }
 
             // Fetch separately to release the lock
-            let peeked_value = shared_inner_state
-                .store
-                .read()
-                .await
-                .peek(&key)
-                .await;
+            let peeked_value = shared_inner_state.store.read().await.peek(&key).await;
 
             // If value was deleted since pulling keys, don't issue a superfluous retrieve.
             if let Some(value) = peeked_value {
@@ -94,12 +87,12 @@ where
                     .data_source
                     .retrieve_with_hint(&key, &value);
 
-                if let Some(v) = canonical_value.as_ref() {
+                if let Some(v) = canonical_value.await.as_ref() {
                     let mut store_handle = shared_inner_state.store.write().await;
 
                     // TODO: During telemetry pass, consider making this not silent
                     // Respect delete if delete occurred during retrieval
-                    let _ = store_handle.update(key, v.clone());
+                    let _ = store_handle.update(key, v.clone()).await;
                 }
             }
         }
@@ -117,30 +110,26 @@ where
     type Value = Value;
     type FlushResultIterator = S::FlushResultIterator;
 
-    async fn get<Q: Borrow<Self::Key> + Sync>(
-        &self,
-        key: &Q,
-    ) -> Option<CacheLookupSuccess<Value>> {
+    async fn get<Q: Borrow<Self::Key> + Sync>(&self, key: &Q) -> Option<CacheLookupSuccess<Value>> {
         let read_lock = self.shared_inner_state.store.read().await;
         let value = read_lock.get(key).await;
 
         match value {
             None => {
                 drop(read_lock);
-                match self.shared_inner_state
-                    .data_source
-                    .retrieve(key)
-                    .map(|value: Self::Value| async {
+                match self.shared_inner_state.data_source.retrieve(key).await.map(
+                    |value: Self::Value| async {
                         // TODO: During telemetry pass, consider making this not silent
                         let _ = self
                             .shared_inner_state
                             .store
                             .write()
                             .await
-                            .put(key.borrow().clone(), value.clone());
+                            .put(key.borrow().clone(), value.clone())
+                            .await;
                         CacheLookupSuccess::new(StoreResult::NotFound, true, value)
-                    })
-                {
+                    },
+                ) {
                     Some(fut) => Some(fut.await),
                     None => None,
                 }
@@ -150,6 +139,7 @@ where
                     .shared_inner_state
                     .data_source
                     .is_valid(key.borrow(), &value)
+                    .await
                 {
                     StoreResult::Valid
                 } else {
@@ -166,7 +156,14 @@ where
     }
 
     async fn stop_tracking<Q: Borrow<Self::Key> + Sync>(&self, key: &Q) -> CacheBrownsResult<()> {
-        match self.shared_inner_state.store.write().await.delete(key).await {
+        match self
+            .shared_inner_state
+            .store
+            .write()
+            .await
+            .delete(key)
+            .await
+        {
             Ok(_) => Ok(()),
             Err(e) => Err(e),
         }
@@ -175,10 +172,11 @@ where
 
 #[cfg(test)]
 mod tests {
-    use crate::hydration::polling::PollingHydrator;
-    use crate::hydration::{CacheLookupSuccess, Hydrator};
-    use crate::source_of_record::test_helpers::{MockSor, MockSorWrapper};
-    use crate::store::test_helpers::{MockStore, MockStoreWrapper};
+    use crate::{
+        hydration::{polling::PollingHydrator, CacheLookupSuccess, Hydrator},
+        source_of_record::test_helpers::{MockSor, MockSorWrapper},
+        store::test_helpers::{MockStore, MockStoreWrapper},
+    };
     use std::time::Duration;
 
     const CONTINUOUS: Duration = Duration::from_secs(0);

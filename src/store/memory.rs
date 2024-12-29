@@ -1,9 +1,6 @@
-use crate::store::Store;
-use crate::CacheBrownsResult;
+use crate::{store::Store, CacheBrownsResult};
 use itertools::Itertools;
-use std::borrow::Borrow;
-use std::collections::HashMap;
-use std::vec;
+use std::{borrow::Borrow, collections::HashMap, vec};
 
 /// A [`MemoryStore`] is a wrapper around [`HashMap`] that satisfies [`Store`].
 #[derive(Default)]
@@ -86,8 +83,7 @@ impl<Key: Clone + Eq + std::hash::Hash + Send + Sync, Value: Clone + Send + Sync
 
 #[cfg(test)]
 mod tests {
-    use crate::store::memory::MemoryStore;
-    use crate::store::Store;
+    use crate::store::{memory::MemoryStore, Store};
     use std::collections::HashMap;
 
     #[tokio::test]
