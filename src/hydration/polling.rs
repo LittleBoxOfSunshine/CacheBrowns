@@ -127,6 +127,7 @@ where
                             .await
                             .put(key.borrow().clone(), value.clone())
                             .await;
+                        // TODO: Option to spawn as background
                         CacheLookupSuccess::new(StoreResult::NotFound, true, value)
                     },
                 ) {

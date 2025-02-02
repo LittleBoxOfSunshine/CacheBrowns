@@ -16,20 +16,34 @@ jobs:
 
     steps:
       - uses: actions/checkout@v3
-      - name: Build
-        run: cargo build --verbose --locked
+      - name: Install Rust
+        run: rustup update stable
+      - uses: cargo-bins/cargo-binstall@main
+      - uses: taiki-e/install-action@cargo-llvm-cov
       - name: Format
         run: cargo fmt --check
       - name: Clippy
         run: cargo clippy --tests -- --deny warnings
-      - name: Run tests
-        run: cargo test --verbose
       - name: Docs
-        run: RUSTDOCFLAGS="-D warnings" cargo doc --no-deps
+        run: RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --all-features
+      - name: Build default features
+        run: cargo build --tests --verbose
+      - name: Test default features
+        run: cargo test
+      - name: Doc Test
+        run: cargo test --doc --all-features
+      - name: Generate code coverage
+        run: cargo llvm-cov --all-features --lcov --output-path lcov.info
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v3
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: lcov.info
+          fail_ci_if_error: true
       # This crate manually manages memory in some cases, so run valgrind
       - name: Install valgrind
         run: sudo apt-get update && sudo apt-get install valgrind
       - name: Install cargo-valgrind
-        run: cargo install cargo-valgrind
+        run: cargo binstall cargo-valgrind -y
       - name: Detect Memory Leaks
         run: cargo valgrind test

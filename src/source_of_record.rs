@@ -11,7 +11,6 @@ use std::{borrow::Borrow, future::Future};
 /// It is the key trait for decoupling the application logic from the general purpose strategy
 /// implementations. Implementations can be composed to reuse and customize common implementations.
 #[trait_variant::make(Send + Sync)]
-//#[cfg_attr(test, mockall::automock(type Key=u32; type Value=u32;))]
 pub trait SourceOfRecord {
     type Key: Clone + Send + Sync;
     type Value: Clone + Send + Sync;
