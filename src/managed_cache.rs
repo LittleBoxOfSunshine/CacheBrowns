@@ -44,9 +44,9 @@ impl<H> Clone for ManagedCache<H> {
     }
 }
 
-impl<'a, Key, Value, H> ManagedCache<H>
+impl<Key, Value, H> ManagedCache<H>
 where
-    Value: From<CacheLookupSuccess<Value>> + Clone + 'a,
+    Value: From<CacheLookupSuccess<Value>> + Clone,
     H: Hydrator<Key = Key, Value = Value>,
 {
     pub fn new(hydrator: H, when_invalid: InvalidCacheEntryBehavior) -> Self {

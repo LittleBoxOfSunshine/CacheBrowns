@@ -210,7 +210,7 @@ pub mod test_helpers {
 
     #[automock]
     impl Store {
-        pub async fn get<'a>(&self, _key: &i32) -> Option<i32> {
+        pub async fn get(&self, _key: &i32) -> Option<i32> {
             unimplemented!()
         }
 

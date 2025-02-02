@@ -1,15 +1,12 @@
+use crate::source_of_record::SourceOfRecord;
+use http::{Request, Response};
+use http_cache_semantics::{BeforeRequest, CacheOptions, CachePolicy};
 use std::borrow::Borrow;
 use std::time::SystemTime;
-use crate::source_of_record::{SourceOfRecord};
-use http::{HeaderMap, Request, Response};
-use http_cache_semantics::{BeforeRequest, CacheOptions, CachePolicy};
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use serde::ser::SerializeStruct;
 
 /// Implements an HTTP [`SourceOfRecord`] that respects cache control headers by wrapping an
 /// implementation of [`HttpFetcher`].
-pub struct HttpDataSourceOfRecord<F>
-{
+pub struct HttpDataSourceOfRecord<F> {
     fetcher: F,
     cache_options: CacheOptions,
 }
@@ -18,12 +15,18 @@ impl<F> HttpDataSourceOfRecord<F> {
     /// Create a [`HttpDataSourceOfRecord`] with default values for [`CacheOptions`]. The defaults
     /// are from [`DEFAULT_CACHE_OPTIONS`]
     pub fn new(fetcher: F) -> Self {
-        Self { fetcher, cache_options: DEFAULT_CACHE_OPTIONS }
+        Self {
+            fetcher,
+            cache_options: DEFAULT_CACHE_OPTIONS,
+        }
     }
 
     /// Create the `HttpDataSourceOfRecord` with custom values for [`CacheOptions`].
     pub fn new_with_custom_cache_options(fetcher: F, cache_options: CacheOptions) -> Self {
-        Self { fetcher, cache_options }
+        Self {
+            fetcher,
+            cache_options,
+        }
     }
 }
 
@@ -47,7 +50,10 @@ pub trait HttpFetcher {
     /// Execute the [`Request`]. Do **not** modify the request in *any* way before sending it. The
     /// user of your implementation will potentially inject cache-control headers. Any headers that
     /// you need to inject should have already been added in [`create_request`].
-    async fn fetch(&self, request: Request<Self::RequestBody>) -> Option<(Response<Self::ResponseBody>, Self::Value)>;
+    async fn fetch(
+        &self,
+        request: Request<Self::RequestBody>,
+    ) -> Option<(Response<Self::ResponseBody>, Self::Value)>;
 }
 
 /// Default [`CacheOptions`] when custom ones aren't provided.
@@ -59,13 +65,15 @@ const DEFAULT_CACHE_OPTIONS: CacheOptions = CacheOptions {
 };
 
 impl<F> SourceOfRecord for HttpDataSourceOfRecord<F>
-where F: HttpFetcher
+where
+    F: HttpFetcher,
 {
     type Key = F::Key;
     type Value = HttpRecord<F::Value>;
 
     async fn retrieve<Q: Borrow<Self::Key> + Sync>(&self, key: &Q) -> Option<Self::Value> {
-        todo!()
+        let request = self.fetcher.create_request(key.borrow()).await?;
+        self.fetch_value(&request).await
     }
 
     async fn retrieve_with_hint<Q: Borrow<Self::Key> + Sync, V: Borrow<Self::Value> + Sync>(
@@ -74,21 +82,45 @@ where F: HttpFetcher
         current_value: &V,
     ) -> Option<Self::Value> {
         let request = self.fetcher.create_request(key.borrow()).await?;
-        Some(match current_value.borrow().cache_policy.before_request(&request, SystemTime::now()) {
-            BeforeRequest::Fresh(_) => (*current_value.borrow()).clone(),
-            BeforeRequest::Stale { request: _, matches: _ } => {
-                let (response, value) = self.fetcher.fetch(request.clone()).await?;
-
-                HttpRecord {
-                    inner: value,
-                    cache_policy: CachePolicy::new_options(&request, &response, SystemTime::now(), DEFAULT_CACHE_OPTIONS)
-                }
+        Some(
+            match current_value
+                .borrow()
+                .cache_policy
+                .before_request(&request, SystemTime::now())
+            {
+                BeforeRequest::Fresh(_) => (*current_value.borrow()).clone(),
+                BeforeRequest::Stale {
+                    request: _,
+                    matches: _,
+                } => self.fetch_value(&request).await?,
             },
-        })
+        )
     }
 
-    async fn is_valid(&self, key: &Self::Key, value: &Self::Value) -> bool {
+    async fn is_valid(&self, _key: &Self::Key, value: &Self::Value) -> bool {
         value.cache_policy.is_stale(SystemTime::now())
+    }
+}
+
+impl<F> HttpDataSourceOfRecord<F>
+where
+    F: HttpFetcher,
+{
+    async fn fetch_value(
+        &self,
+        request: &Request<<F as HttpFetcher>::RequestBody>,
+    ) -> Option<HttpRecord<<F as HttpFetcher>::Value>> {
+        let (response, value) = self.fetcher.fetch(request.clone()).await?;
+
+        Some(HttpRecord {
+            inner: value,
+            cache_policy: CachePolicy::new_options(
+                request,
+                &response,
+                SystemTime::now(),
+                self.cache_options,
+            ),
+        })
     }
 }
 
@@ -96,6 +128,16 @@ where F: HttpFetcher
 pub struct HttpRecord<T> {
     inner: T,
     cache_policy: CachePolicy,
+}
+
+impl<T> HttpRecord<T> {
+    pub fn inner(&self) -> &T {
+        &self.inner
+    }
+
+    pub fn into_inner(self) -> T {
+        self.inner
+    }
 }
 
 // TODO: Confirm there isn't a better way before implementing deserialize.
