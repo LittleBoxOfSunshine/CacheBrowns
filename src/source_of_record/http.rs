@@ -49,7 +49,7 @@ pub trait HttpFetcher {
 
     /// Execute the [`Request`]. Do **not** modify the request in *any* way before sending it. The
     /// user of your implementation will potentially inject cache-control headers. Any headers that
-    /// you need to inject should have already been added in [`create_request`].
+    /// you need to inject should have already been added in [`create_request`][`HttpFetcher::create_request`].
     async fn fetch(
         &self,
         request: Request<Self::RequestBody>,
@@ -57,7 +57,7 @@ pub trait HttpFetcher {
 }
 
 /// Default [`CacheOptions`] when custom ones aren't provided.
-const DEFAULT_CACHE_OPTIONS: CacheOptions = CacheOptions {
+pub const DEFAULT_CACHE_OPTIONS: CacheOptions = CacheOptions {
     shared: false,
     cache_heuristic: 0.1,
     immutable_min_time_to_live: std::time::Duration::from_secs(24 * 3600),

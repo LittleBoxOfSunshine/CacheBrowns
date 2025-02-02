@@ -9,9 +9,9 @@ pub mod tiered;
 // TODO: Demonstrate integration with fast external store like: https://crates.io/crates/scc
 // TODO: Add link for blog post
 
-/// A [`Store`] is the base layer of a [`crate::managed_cache::ManagedCache`] that handles the
-/// storage of data. The actual representation of the underlying data is arbitrary, and higher
-/// layers must consider that when working with the underlying data.
+/// A [`Store`] is the base layer of a [`ManagedCache`][`crate::managed_cache::ManagedCache`] that
+/// handles the storage of data. The actual representation of the underlying data is arbitrary, and
+/// higher layers must consider that when working with the underlying data.
 ///
 /// It should *never* be possible for a store to enter a non-recoverable, corrupted state as a
 /// result of its internal logic. This doesn't mean its operations are infallible, it just means
@@ -43,10 +43,10 @@ pub mod tiered;
 /// ## Replacement and Thread Safety
 ///
 /// Replacement layers pose a trade-off for the design. The distinction between a Replacement and
-/// a Pure Store is that [`get`] potentially has side effects, meaning interior mutability.
+/// a Pure Store is that `get` potentially has side effects, meaning interior mutability.
 ///
 /// ### All functions mutable
-/// If we make [`get`] mutable, we preclude hyrdators from making optimizations on internal locking. We
+/// If we make `get` mutable, we preclude hydrators from making optimizations on internal locking. We
 /// can't avoid that by continuing to bubble up thread safety responsibility either because it leaks
 /// aspects of the behaviors we are trying to abstract away in the first place and because it
 /// precludes yet more optimization.
@@ -57,7 +57,7 @@ pub mod tiered;
 /// alternative semantics. An identity Replacement struct would have to be used to wrap Basic Stores
 /// so that hyrdators, all expecting Replacements, can accept them.
 ///
-/// For this to pay off, [`Hydrator`] must have a Replacement and Pure Store variant of its
+/// For this to pay off, [`Hydrator`][`crate::hydration::Hydrator`] must have a Replacement and Pure Store variant of its
 /// implementation. In this way, it can use optimized behavior where available and take
 /// responsibility for thread safety instead when it can't.
 ///
@@ -67,12 +67,12 @@ pub mod tiered;
 /// additional boilerplate for them to contend with.
 ///
 /// ### Interior Mutability
-/// With interior mutability, the [`get`] call itself can continue to be read only, with the write
+/// With interior mutability, the `get` call itself can continue to be read only, with the write
 /// aspects handled internally. This is very attractive, because we're not leaking the side effects
 /// into the trait. Additionally, this can be done quite performantly, especially if we are willing
 /// to accept relaxed ordering for very closely timed events. By leveraging queues internally, at
-/// most the queue operation has an interior critical section. The [`Lru`] implementation leverages
-/// this approach.
+/// most the queue operation has an interior critical section. The [`Lru`][`crate::store::replacement::lru::LruReplacement`]
+/// implementation leverages this approach.
 ///
 /// In the prototype build we've elected for this option. It's the cleanest, most flexible, and the
 /// least code. These are all important qualities for rapid iteration and time to market. Given this
