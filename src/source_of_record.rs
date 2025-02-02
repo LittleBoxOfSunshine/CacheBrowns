@@ -10,7 +10,6 @@ use std::{borrow::Borrow, future::Future};
 ///
 /// It is the key trait for decoupling the application logic from the general purpose strategy
 /// implementations. Implementations can be composed to reuse and customize common implementations.
-
 #[trait_variant::make(Send + Sync)]
 //#[cfg_attr(test, mockall::automock(type Key=u32; type Value=u32;))]
 pub trait SourceOfRecord {
@@ -34,7 +33,6 @@ pub trait SourceOfRecord {
     /// Batched version of [`SourceOfRecord::retrieve`]. Retrieves records in as few batches as
     /// possible. Some sources can fetch many records at once, informing the source up front that
     /// multiple records are required allows for potential optimization.
-    // async fn batch_retrieve<'a, I>(&'a self, keys: I) -> impl Iterator<Item = impl Future<Output = impl Iterator<Item = (Self::Key, Option<Self::Value>)>> + 'a>
     async fn batch_retrieve<I>(
         &self,
         keys: I,

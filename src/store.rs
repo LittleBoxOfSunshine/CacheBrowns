@@ -99,6 +99,7 @@ pub trait Store {
     /// the store is an LRU, calls to [`Store::get`] must induce the side effect of updating the usage
     /// order.
     async fn get<Q: Borrow<Self::Key> + Sync>(&self, key: &Q) -> Option<Self::Value>;
+    // TODO: Consider result<option>
 
     /// Complement of [`Store::get`]. A [`Store::poke`] will cause the side effects of a read to occur without
     /// actually reading the data. Fetching unneeded data is wasteful in general, but in some cases

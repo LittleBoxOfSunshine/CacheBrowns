@@ -50,10 +50,10 @@ where
             store: RwLock::from(store),
         });
 
-        // TODO: Consider integration with the try to wait feature. This should probably have an abstraction to make easier to consume via propagation. Some sort of token returned (could be as simple as a type alias for the future).
         Self {
             shared_inner_state: shared_state.clone(),
-            _polling_thread: PollingTaskBuilder::new(polling_interval).task_with_checker(
+            _polling_thread: PollingTaskBuilder::new().task_with_checker(
+                polling_interval,
                 move |checker| {
                     let shared_state_clone = shared_state.clone();
                     async move {
