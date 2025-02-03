@@ -13,11 +13,13 @@ The second priority is flexibility. For maximum interoperability of components, 
 correctness is not a part of `Trait` contracts and certain optimizations (such as return by reference) are not mandatory
 for implementors. 
 
-Finally, speed is still important. References or [Cow](https://doc.rust-lang.org/std/borrow/enum.Cow.html) are used
-whenever possible (meaning when doing so doesn't preclude by value usage) to avoid unnecessary copies and
+Finally, speed is still important. References or [Cow](https://doc.rust-lang.org/std/borrow/enum.Cow.html) are used 
+whenever reasonable (meaning when doing so doesn't preclude by value usage) to avoid unnecessary copies and to allow for
+trait implementations that hold no in memory state to return references to.
 
 Spiritually the concepts leveraged here are similar to "one-way data flow" and managed memory. It was inspired by a need
-to address cache invalidation bugs at scale in the eventually-consistent, distributed systems powering Azure IMDS and Azure Boost.
+to address cache invalidation bugs at scale for the millions of nodes in the eventually-consistent, distributed systems
+powering Azure IMDS and Azure Boost.
 
 ## Usage
 
@@ -27,7 +29,7 @@ See the [docs.rs page]() for full details. This README focuses on the theory beh
 
 ## Background
 
-This is a condensed discussion. For a more thorough, but still in formal, exploration of these concepts refer to 
+This is a condensed discussion. For a more thorough, but still informal, exploration of these concepts refer to 
 [the project announcement blog post](). For a complete, formal discussion of the theory independent of this 
 implementation see ["the whitepaper"]().
 
@@ -48,11 +50,9 @@ implementation see ["the whitepaper"]().
 
 ###  
 
-For the sake of this discussion we'll classify caches as either `custom` and `shared`. Shared implementations would
+For the sake of this discussion we'll think of caches as either `custom` and `shared`. Shared implementations would
 be examples like caching built into a client such as for HTTP or a database. Custom caches exist because there is no
 shared implementation for the application, or as a layer of customization on top of a shared implementation.
-
-They tend to be of differe
 
 ## Problem Statement
 
@@ -79,7 +79,7 @@ Cache validation is inherently hard, but unforced errors often make it worse:
 ## Requirements
 
 We can address these issues by providing a generic *read-through* cache that fully encapsulates the underlying store, writes,
-evictions, and staleness checks. The *cache-aside* pattern is generally an anti-pattern that stems from poorly factored caches,
+evictions, and staleness checks. We contend that the *cache-aside* pattern is generally an anti-pattern that stems from poorly factored caches,
 not from a legitimate application specific need. Even in the case where writes or record invalidations are needed they do
 not need to be handled by the application code, they can be injected as strategies.
 
@@ -101,26 +101,18 @@ not need to be handled by the application code, they can be injected as strategi
 This project welcomes contributions and suggestions. By making contributions, you agree that they will be made available
 under both licenses of this project.
 
-## Acknowledgments / Why Fork?
+## Acknowledgments
 
-This project was originally started as a Hackathon project at Microsoft. It sat around as a PoC for awhile in C++ before
-it was eventually ported to Rust as a proposed design for work supporting Azure Boost. That project was funded, but the
-initial investments focused on adding strategy implementations that supported the highly specialized / single purpose embedded
-software applications we were developing.
+This project is a fork of an open source Microsoft Hackathon project. It sat around as a PoC for a while in C++ before
+it was eventually ported to Rust as a proposed design for work supporting Azure Boost. That experimental work is
+targeting highly specialized environments with trait implementations that aren't appropriate for general use. Seeing
+that the idea could be adopted successfully in that environment reinforced its merits. I want to see it though. Since I
+don't have time for that at work I decided to do it outside of work.
 
-This meant the initial work was disjointed enough that there wasn't much to publish on the public crate in the meantime.
-It wasn't a case of not wanting to publish, it truly was specialized to target the custom embedded hardware + software in Azure Boost to the point most of it would even be useless for other parts of Azure, let alone to the world more broadly.
-I believe that publishing that code in the crate would detract from it by adding noise and a source of confusion.
-It would be neat to publish somewhere as a demo of how far you can push the architecture, but it doesn't belong in the crate proper.
+But that's on my personal time, so it's in my personal repo :)
 
-That set of challenges just gave the idea even more credence in my mind though, since the same architecture
-could even be effectively applied in that esoteric use case despite never being intended for it (the hackathon predated
-our Azure Boost work). While I always had support for open sourcing the project, the reality is the full version was way
-outside my job responsibilities and I couldn't find time to continue it. I've forked the initial concept repo so that I
-can finish this in my personal time and add public facing features like additional optimization and greater generalization of traits.
-
-I have received feedback over the years as this sat on the back burner from some of my colleagues at Microsoft, and I am happy 
-to list them out here when they confirm they're comfortable being identified publicly that way.
+I have received feedback over the years as this sat on the back burner from some of my colleagues at Microsoft, and I am
+happy to list them out here when they confirm they're comfortable being identified publicly that way.
 
 ## License
 

@@ -1,16 +1,18 @@
 // This implementation borrows heavily from https://crates.io/crates/lru
 
-use crate::store::Store;
-use crate::CacheBrownsResult;
+use crate::{store::Store, CacheBrownsResult};
 use itertools::Itertools;
-use std::borrow::{Borrow, Cow};
-use std::cell::RefCell;
-use std::collections::HashMap;
-use std::hash::{Hash, Hasher};
-use std::mem::MaybeUninit;
-use std::num::NonZeroUsize;
-use std::ptr::NonNull;
-use std::{ptr, vec};
+use std::{
+    borrow::Borrow,
+    cell::RefCell,
+    collections::HashMap,
+    hash::{Hash, Hasher},
+    mem::MaybeUninit,
+    num::NonZeroUsize,
+    ptr,
+    ptr::NonNull,
+    vec,
+};
 
 #[derive(Eq, Debug)]
 struct KeyRef<Key>
@@ -76,16 +78,23 @@ impl<Key> Entry<Key> {
 
 /// Implements the Least Recently Used replacement strategy on top of an arbitrary data store.
 ///
+/// ## Volatility
+///
 /// While it supports non-volatile data, the usage order metadata held in memory is volatile.
 /// For example, if you restart the process the same data will load, but the order depends on
 /// the order the underlying store iterates keys over. This tradeoff was chosen because committing
-/// usage tracking in a non-volatile store means that all read operations are now writes in
+/// usage tracking in a non-volatile store means that all read operations are now writes and
 /// potentially expensive calls. Given that the point of a cache is to optimize reads and storing
 /// the order perfectly over long periods of time isn't generally needed, this is the better default
 /// implementation.
+///
+/// ## Thread Safety
+///
+///  poses a challenge to the [`Store`] trait. [`Store::get`] is immutable, this is because
+/// for all basic stores there are no side effects and thus
 pub struct LruReplacement<Key, Value, S>
 where
-    Key: Eq + Hash,
+    Key: Eq + Hash + Send + Sync,
     S: Store<Key = Key, Value = Value>,
 {
     store: S,
@@ -95,13 +104,29 @@ where
     tail: *mut Entry<Key>,
 }
 
-impl<Key, Value, S> LruReplacement<Key, Value, S>
+unsafe impl<Key, Value, S> Send for LruReplacement<Key, Value, S>
 where
-    Key: Eq + Hash + Clone,
-    Value: Clone,
+    Key: Eq + Hash + Clone + Send + Sync,
+    Value: Clone + Send + Sync,
     S: Store<Key = Key, Value = Value>,
 {
-    pub fn new(max_capacity: NonZeroUsize, store: S) -> CacheBrownsResult<Self> {
+}
+
+unsafe impl<Key, Value, S> Sync for LruReplacement<Key, Value, S>
+where
+    Key: Eq + Hash + Clone + Send + Sync,
+    Value: Clone + Send + Sync,
+    S: Store<Key = Key, Value = Value>,
+{
+}
+
+impl<Key, Value, S> LruReplacement<Key, Value, S>
+where
+    Key: Eq + Hash + Clone + Send + Sync,
+    Value: Clone + Send + Sync,
+    S: Store<Key = Key, Value = Value>,
+{
+    pub async fn new(max_capacity: NonZeroUsize, store: S) -> CacheBrownsResult<Self> {
         let mut lru = Self {
             store,
             index: RefCell::new(HashMap::new()),
@@ -117,11 +142,11 @@ where
 
         // If the data store is non-volatile, there might already be data present. Iterate through
         // the values to build out an arbitrary usage order.
-        for key in lru.store.keys() {
+        for key in lru.store.keys().await {
             lru.add_to_usage_order(key.clone());
         }
 
-        lru.remove_excess_entries()?;
+        lru.remove_excess_entries().await?;
 
         Ok(lru)
     }
@@ -154,7 +179,10 @@ where
         }
     }
 
-    fn remove<Q: Borrow<<LruReplacement<Key, Value, S> as Store>::Key>>(&self, key: &Q) -> bool {
+    fn remove_from_usage_order<Q: Borrow<<LruReplacement<Key, Value, S> as Store>::Key>>(
+        &self,
+        key: &Q,
+    ) -> bool {
         if let Some(entry) = self.index.borrow_mut().remove(&KeyRef::from(key)) {
             let entry = entry.as_ptr();
             self.detach(entry);
@@ -184,20 +212,21 @@ where
         }
     }
 
-    fn remove_excess_entries(&mut self) -> CacheBrownsResult<()> {
+    async fn remove_excess_entries(&mut self) -> CacheBrownsResult<()> {
         while self.index.borrow().len() > self.max_capacity.get() {
-            self.try_delete_last()?;
+            self.try_delete_last().await?;
         }
 
         Ok(())
     }
 
-    fn try_delete_last(&mut self) -> CacheBrownsResult<()> {
+    async fn try_delete_last(&mut self) -> CacheBrownsResult<()> {
         unsafe {
             // SAFETY: max_capacity is non-zero, so if this executes tail.previous != head
             let _ = self
                 .store
-                .delete((*(*self.tail).previous).key.assume_init_ref())?;
+                .delete((*(*self.tail).previous).key.assume_init_ref())
+                .await?;
 
             self.remove_last_entry_from_index();
         }
@@ -222,7 +251,7 @@ where
 
 impl<Key, Value, S> Drop for LruReplacement<Key, Value, S>
 where
-    Key: Eq + Hash,
+    Key: Eq + Hash + Send + Sync,
     S: Store<Key = Key, Value = Value>,
 {
     fn drop(&mut self) {
@@ -230,11 +259,11 @@ where
             .borrow_mut()
             .drain()
             .for_each(|(_, entry)| unsafe {
-                let mut entry = *Box::from_raw(entry.as_ptr());
-                // SAFETY: In order for this to be in the map, it has a value.
-                entry.key.assume_init_drop();
+                let _ = Box::from_raw(entry.as_ptr());
             });
 
+        // These were allocated at construction time unconditionally. Never are deleted during
+        // mutations. Must be freed now.
         unsafe {
             let _ = Box::from_raw(self.head);
             let _ = Box::from_raw(self.tail);
@@ -244,21 +273,21 @@ where
 
 impl<Key, Value, S> Store for LruReplacement<Key, Value, S>
 where
-    Key: Eq + Hash + Clone,
-    Value: Clone,
+    Key: Eq + Hash + Clone + Send + Sync,
+    Value: Clone + Send + Sync,
     S: Store<Key = Key, Value = Value>,
 {
     type Key = Key;
     type Value = Value;
 
     // Avoid underlying [`keys`] implementation to guarantee an all memory operation.
-    type KeyRefIterator<'k> = vec::IntoIter<&'k Self::Key> where Key: 'k, Value: 'k, S: 'k;
+    type KeyIterator = vec::IntoIter<Key>;
 
     // Because flush can fail, we can't rely on our own iterator as a potential optimization.
-    type FlushResultIterator = S::FlushResultIterator;
+    type FlushResultIterator = vec::IntoIter<CacheBrownsResult<Self::Key>>;
 
-    fn get<Q: Borrow<Self::Key>>(&self, key: &Q) -> Option<Cow<Self::Value>> {
-        let value = self.store.get(key);
+    async fn get<Q: Borrow<Self::Key> + Sync>(&self, key: &Q) -> Option<Self::Value> {
+        let value = self.store.get(key).await;
 
         if value.is_some() {
             self.mark_as_most_recent(key);
@@ -267,23 +296,29 @@ where
         value
     }
 
-    fn peek<Q: Borrow<Self::Key>>(&self, key: &Q) -> Option<Cow<Self::Value>> {
-        self.store.peek(key)
+    async fn poke<Q: Borrow<Self::Key> + Sync>(&self, key: &Q) {
+        self.store.poke(key).await;
     }
 
-    fn put(&mut self, key: Self::Key, value: Self::Value) {
+    async fn peek<Q: Borrow<Self::Key> + Sync>(&self, key: &Q) -> Option<Self::Value> {
+        self.store.peek(key).await
+    }
+
+    async fn update(&mut self, key: Self::Key, value: Self::Value) -> CacheBrownsResult<()> {
+        self.store.update(key, value).await
+    }
+
+    async fn put(&mut self, key: Self::Key, value: Self::Value) -> CacheBrownsResult<()> {
         if self.index.borrow().len() >= self.max_capacity.get()
             // If the key is already present, this is an update and no eviction should occur
-            && !self.contains(&key)
+            && !self.contains(&key).await
         {
             // We failed to evict, so to honor space limit we can't insert
-            if self.try_delete_last().is_err() {
-                return;
-            }
+            self.try_delete_last().await?;
         }
 
         // Update
-        if self.contains(&key) {
+        if self.contains(&key).await {
             self.mark_as_most_recent(&key);
         }
         // Insert
@@ -291,63 +326,91 @@ where
             self.add_to_usage_order(key.clone());
         }
 
-        self.store.put(key, value);
+        self.store.put(key, value).await
     }
 
-    fn delete<Q: Borrow<Self::Key>>(&mut self, key: &Q) -> CacheBrownsResult<Option<Self::Key>> {
-        if self.remove(key) {
-            return self.store.delete(key);
+    async fn delete<Q: Borrow<Self::Key> + Sync>(
+        &mut self,
+        key: &Q,
+    ) -> CacheBrownsResult<Option<Self::Key>> {
+        self.store.delete(key).await.map(|key| {
+            key.inspect(|key| {
+                self.remove_from_usage_order(&key);
+            })
+        })
+    }
+
+    async fn flush(&mut self) -> Self::FlushResultIterator {
+        let mut flush_results = Vec::new();
+        flush_results.reserve_exact(self.index.borrow().len());
+
+        // Remove anything that was successfully deleted from usage order
+        for result in self.store.flush().await {
+            flush_results.push(result.inspect(|key| {
+                self.remove_from_usage_order(&key);
+            }));
         }
 
-        Ok(None)
+        flush_results.into_iter()
     }
 
-    fn flush(&mut self) -> Self::FlushResultIterator {
-        self.index.borrow_mut().clear();
-        self.store.flush()
-    }
-
-    fn keys(&self) -> Self::KeyRefIterator<'_> {
+    async fn keys(&self) -> Self::KeyIterator {
         // We can optimize by guaranteeing a memory lookup checking the metadata instead of the
         // underlying store, which may or may not be in memory
         unsafe {
             self.index
                 .borrow()
                 .keys()
-                .map(|k| &*k.key)
+                .map(|k| (*k.key).clone())
                 .collect_vec()
                 .into_iter()
         }
     }
 
-    fn contains<Q: Borrow<Self::Key>>(&self, key: &Q) -> bool {
+    async fn contains<Q: Borrow<Self::Key> + Sync>(&self, key: &Q) -> bool {
         // We can optimize by guaranteeing a memory lookup checking the metadata instead of the
         // underlying store, which may or may not be in memory
         self.index.borrow().contains_key(&KeyRef::from(key))
+    }
+
+    async fn take<Q: Borrow<Self::Key> + Sync>(
+        &mut self,
+        _key: &Q,
+    ) -> CacheBrownsResult<Option<(Self::Key, Self::Value)>> {
+        todo!()
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::store::memory::MemoryStore;
-    use crate::store::replacement::lru::{KeyRef, LruReplacement};
-    use crate::store::Store;
-    use crate::CacheBrownsResult;
+    use crate::store::test_helpers::{MockStore, MockStoreWrapper};
+    use crate::{
+        store::{
+            memory::MemoryStore,
+            replacement::lru::{KeyRef, LruReplacement},
+            Store,
+        },
+        CacheBrownsResult,
+    };
     use itertools::{assert_equal, Itertools};
-    use std::borrow::{Borrow, Cow};
-    use std::collections::BTreeSet;
-    use std::fmt::Debug;
-    use std::hash::Hash;
-    use std::io::ErrorKind;
-    use std::num::NonZeroUsize;
-    use std::{ptr, vec};
+    use std::{
+        borrow::Borrow, collections::BTreeSet, fmt::Debug, hash::Hash, io::ErrorKind,
+        num::NonZeroUsize, ptr, vec,
+    };
+    use test_case::test_case;
 
-    fn lru(max_capacity: usize) -> LruReplacement<u32, u32, MemoryStore<u32, u32>> {
+    async fn lru(max_capacity: usize) -> LruReplacement<u32, u32, MemoryStore<u32, u32>> {
         let store = MemoryStore::new();
-        LruReplacement::new(NonZeroUsize::new(max_capacity).unwrap(), store).unwrap()
+        LruReplacement::new(NonZeroUsize::new(max_capacity).unwrap(), store)
+            .await
+            .unwrap()
     }
 
-    fn assert_key_is_most_recent<K: Eq + Hash + Debug, V, S: Store<Key = K, Value = V>>(
+    fn assert_key_is_most_recent<
+        K: Eq + Hash + Debug + Send + Sync,
+        V,
+        S: Store<Key = K, Value = V>,
+    >(
         store: &LruReplacement<K, V, S>,
         key: K,
     ) {
@@ -356,108 +419,108 @@ mod tests {
         }
     }
 
-    #[test]
-    fn empty_lru_can_drop() {
-        let _ = lru(1);
+    #[tokio::test]
+    async fn empty_lru_can_drop() {
+        let _ = lru(1).await;
     }
 
-    #[test]
-    fn get_on_missing_key_no_side_effects() {
-        let store = lru(1);
+    #[tokio::test]
+    async fn get_on_missing_key_no_side_effects() {
+        let store = lru(1).await;
 
-        assert_eq!(None, store.get(&0));
+        assert_eq!(None, store.get(&0).await);
         assert_eq!(0, store.index.borrow().len());
     }
 
-    #[test]
-    fn capacity_exceeded_oldest_key_removed() {
-        let mut store = lru(1);
-        store.put(0, 1);
-        store.put(1, 1);
+    #[tokio::test]
+    async fn capacity_exceeded_oldest_key_removed() {
+        let mut store = lru(1).await;
+        store.put(0, 1).await.unwrap();
+        store.put(1, 1).await.unwrap();
 
-        assert_eq!(None, store.get(&0));
+        assert_eq!(None, store.get(&0).await);
         assert_eq!(1, store.index.borrow().len());
         assert_key_is_most_recent(&store, 1);
     }
 
-    #[test]
-    fn peek_no_side_effects() {
-        let mut store = lru(2);
-        store.put(0, 1);
-        store.put(1, 1);
+    #[tokio::test]
+    async fn peek_no_side_effects() {
+        let mut store = lru(2).await;
+        store.put(0, 1).await.unwrap();
+        store.put(1, 1).await.unwrap();
 
         assert_key_is_most_recent(&store, 1);
-        let _ = store.peek(&0);
+        store.peek(&0).await;
         assert_key_is_most_recent(&store, 1);
     }
 
-    #[test]
-    fn get_marks_as_latest() {
-        let mut store = lru(2);
-        store.put(0, 1);
-        store.put(1, 1);
+    #[tokio::test]
+    async fn get_marks_as_latest() {
+        let mut store = lru(2).await;
+        store.put(0, 1).await.unwrap();
+        store.put(1, 1).await.unwrap();
 
         assert_key_is_most_recent(&store, 1);
-        let _ = store.get(&0);
+        store.get(&0).await;
         assert_key_is_most_recent(&store, 0);
     }
 
-    #[test]
-    fn put_existing_value_updates_and_marked_latest() {
-        let mut store = lru(2);
-        store.put(0, 1);
-        store.put(1, 1);
+    #[tokio::test]
+    async fn put_existing_value_updates_and_marked_latest() {
+        let mut store = lru(2).await;
+        store.put(0, 1).await.unwrap();
+        store.put(1, 1).await.unwrap();
 
         // Confirm latest as invariant
         assert_key_is_most_recent(&store, 1);
 
-        store.put(0, 42);
+        store.put(0, 42).await.unwrap();
 
         // Confirm original value is now latest
         assert_key_is_most_recent(&store, 0);
 
         // Peak used to avoid side effects
-        assert_eq!(42u32, *store.peek(&0).unwrap())
+        assert_eq!(42u32, store.peek(&0).await.unwrap())
     }
 
-    #[test]
-    fn put_would_evict_but_is_update() {
-        let mut store = lru(2);
-        store.put(0, 1);
-        store.put(1, 1);
+    #[tokio::test]
+    async fn put_would_evict_but_is_update() {
+        let mut store = lru(2).await;
+        store.put(0, 1).await.unwrap();
+        store.put(1, 1).await.unwrap();
 
-        store.put(0, 2);
+        store.put(0, 2).await.unwrap();
 
-        assert!(store.store.contains(&0));
-        assert!(store.store.contains(&1));
+        assert!(store.store.contains(&0).await);
+        assert!(store.store.contains(&1).await);
         assert!(store.index.borrow().contains_key(&KeyRef::from(&0)));
         assert!(store.index.borrow().contains_key(&KeyRef::from(&1)));
-        assert_eq!(2, store.store.keys().len());
+        assert_eq!(2, store.store.keys().await.len());
         assert_eq!(2, store.index.borrow().len());
         assert_key_is_most_recent(&store, 0);
     }
 
-    #[test]
-    fn usage_order_always_shifts_one_right() {
-        let mut store = lru(5);
-        store.put(0, 1);
-        store.put(1, 1);
-        store.put(2, 1);
-        store.put(3, 1);
-        store.put(4, 1);
+    #[tokio::test]
+    async fn usage_order_always_shifts_one_right() {
+        let mut store = lru(5).await;
+        store.put(0, 1).await.unwrap();
+        store.put(1, 1).await.unwrap();
+        store.put(2, 1).await.unwrap();
+        store.put(3, 1).await.unwrap();
+        store.put(4, 1).await.unwrap();
 
         validate_usage_order(vec![4, 3, 2, 1, 0], &store);
 
-        store.get(&2);
+        store.get(&2).await;
         validate_usage_order(vec![2, 4, 3, 1, 0], &store);
 
-        store.get(&1);
+        store.get(&1).await;
         validate_usage_order(vec![1, 2, 4, 3, 0], &store);
 
-        store.get(&2);
+        store.get(&2).await;
         validate_usage_order(vec![2, 1, 4, 3, 0], &store);
 
-        store.get(&0);
+        store.get(&0).await;
         validate_usage_order(vec![0, 2, 1, 4, 3], &store);
     }
 
@@ -475,145 +538,265 @@ mod tests {
         }
     }
 
-    #[test]
-    fn delete_removes_from_index_and_propagates() {
-        let mut store = lru(1);
-        store.put(0, 1);
-        assert!(store.store.contains(&0));
+    #[tokio::test]
+    async fn delete_removes_from_index_and_propagates() {
+        let mut store = lru(1).await;
+        store.put(0, 1).await.unwrap();
+        assert!(store.store.contains(&0).await);
 
-        assert_eq!(None, store.delete(&1).unwrap());
-        assert_eq!(Some(0), store.delete(&0).unwrap());
+        assert_eq!(None, store.delete(&1).await.unwrap());
+        assert_eq!(Some(0), store.delete(&0).await.unwrap());
 
-        assert_eq!(None, store.delete(&0).unwrap());
+        assert_eq!(None, store.delete(&0).await.unwrap());
     }
 
-    #[test]
-    fn flush_no_index_and_propagates() {
-        let mut store = lru(3);
-        store.put(0, 1);
-        store.put(1, 1);
-        store.put(2, 1);
+    #[tokio::test]
+    async fn flush_no_index_and_propagates() {
+        let mut store = lru(3).await;
+        // Confirm flush on empty store causes no issues
+        assert_eq!(0, store.flush().await.count());
 
-        let deleted_keys: BTreeSet<u32> = store.flush().map(|x| x.unwrap().unwrap()).collect();
-        assert_equal(BTreeSet::from_iter(vec![0, 1, 2].into_iter()), deleted_keys);
+        store.put(0, 1).await.unwrap();
+        store.put(1, 1).await.unwrap();
+        store.put(2, 1).await.unwrap();
+
+        let deleted_keys: BTreeSet<u32> = store.flush().await.map(|x| x.unwrap()).collect();
+        assert_equal(BTreeSet::from_iter(vec![0, 1, 2]), deleted_keys);
         assert_eq!(0, store.index.borrow().len());
-        assert_eq!(0, store.store.keys().len());
+        assert_eq!(0, store.store.keys().await.len());
     }
 
-    #[test]
-    fn store_has_initial_data_index_build() {
-        let mut store = MemoryStore::new();
-        store.put(0, 1);
-        store.put(1, 1);
-        store.put(2, 1);
+    #[tokio::test]
+    async fn delete_fails_no_index_change() {
+        let mut mock = MockStore::new();
+        mock.expect_keys().returning(|| vec![].into_iter());
+        mock.expect_put().once().returning(|_, _| Ok(()));
+        mock.expect_delete().once().returning(|_| {
+            Err(Box::new(std::io::Error::new(
+                ErrorKind::Interrupted,
+                "stub",
+            )))
+        });
 
-        let store = LruReplacement::new(NonZeroUsize::new(3).unwrap(), store).unwrap();
+        let mut store =
+            LruReplacement::new(NonZeroUsize::new(1).unwrap(), MockStoreWrapper::new(mock))
+                .await
+                .unwrap();
+        assert!(store.index.borrow().is_empty());
+
+        store.put(0, 1).await.unwrap();
+        assert!(!store.index.borrow().is_empty());
+
+        store.delete(&0).await.unwrap_err();
+        assert!(!store.index.borrow().is_empty());
+    }
+
+    const KEY_HACK_TABLE: [&i32; 5] = [&0, &1, &2, &3, &4];
+
+    #[tokio::test]
+    #[test_case(vec![false]; "single_failure")]
+    #[test_case(vec![true, false]; "first_fails")]
+    #[test_case(vec![false, true]; "last_fails")]
+    #[test_case(vec![true, false, false, false, true]; "several_fail")]
+    #[test_case(vec![true, true, false, false]; "alternate_several_fail")]
+    async fn flush_partially_fails_partial_index_change(results: Vec<bool>) {
+        let enumerated_keys = results.iter().enumerate();
+        let all_keys = enumerated_keys.clone().map(|(i, _)| i).collect_vec();
+        let expected_post_flush_index = enumerated_keys
+            .filter(|x| !*x.1)
+            .map(|x| x.0 as i32)
+            .sorted()
+            .collect_vec();
+
+        let mut mock = MockStore::new();
+        mock.expect_keys().returning(move || {
+            all_keys
+                .iter()
+                .map(|k| KEY_HACK_TABLE[*k])
+                .collect_vec()
+                .into_iter()
+        });
+
+        mock.expect_flush().returning(move || {
+            results
+                .iter()
+                .enumerate()
+                .map(|(key, is_ok)| {
+                    if *is_ok {
+                        Ok(key as i32)
+                    } else {
+                        let error: CacheBrownsResult<i32> =
+                            Err(Box::new(std::io::Error::new(ErrorKind::Other, "")));
+                        error
+                    }
+                })
+                .collect_vec()
+                .into_iter()
+        });
+
+        let mut lru =
+            LruReplacement::new(NonZeroUsize::new(10).unwrap(), MockStoreWrapper::new(mock))
+                .await
+                .unwrap();
+        lru.flush().await;
+
+        let results = expected_post_flush_index.iter().zip_eq(
+            lru.index
+                .borrow()
+                .keys()
+                .map(|k| unsafe { *k.key })
+                .sorted(),
+        );
+
+        println!("{:?}", results);
+
+        for result in results {
+            assert_eq!(*result.0, result.1);
+        }
+    }
+
+    #[tokio::test]
+    async fn store_has_initial_data_index_build() {
+        let mut store = MemoryStore::new();
+        store.put(0, 1).await.unwrap();
+        store.put(1, 1).await.unwrap();
+        store.put(2, 1).await.unwrap();
+
+        let store = LruReplacement::new(NonZeroUsize::new(3).unwrap(), store)
+            .await
+            .unwrap();
 
         // Order isn't guaranteed, so just check values
-        assert!(store.contains(&0));
-        assert!(store.contains(&1));
-        assert!(store.contains(&2));
+        assert!(store.contains(&0).await);
+        assert!(store.contains(&1).await);
+        assert!(store.contains(&2).await);
         assert_eq!(3, store.index.borrow().len());
     }
 
-    #[test]
-    fn store_has_too_much_initial_data_records_purged_valid_index() {
+    #[tokio::test]
+    async fn store_has_too_much_initial_data_records_purged_valid_index() {
         let mut store = MemoryStore::new();
-        store.put(1, 1);
-        store.put(2, 1);
-        store.put(4, 1);
+        store.put(1, 1).await.unwrap();
+        store.put(2, 1).await.unwrap();
+        store.put(4, 1).await.unwrap();
 
-        let store = LruReplacement::new(NonZeroUsize::new(2).unwrap(), store).unwrap();
+        let store = LruReplacement::new(NonZeroUsize::new(2).unwrap(), store)
+            .await
+            .unwrap();
 
         // Order isn't guaranteed, so just check that exactly one was deleted.
         let index_sum: i32 = store.index.borrow().keys().map(|k| unsafe { *k.key }).sum();
-        let store_sum: i32 = store.store.keys().cloned().sum();
+        let store_sum: i32 = store.store.keys().await.sum();
         assert!(index_sum == 3 || index_sum == 6 || index_sum == 5);
 
         // We picked powers of 2, so checking sum rather than all values is sufficient for equality.
         assert_eq!(store_sum, index_sum);
         assert_eq!(2, store.index.borrow().len());
-        assert_eq!(2, store.store.keys().len());
+        assert_eq!(2, store.store.keys().await.len());
     }
 
-    #[test]
-    fn store_has_too_much_initial_data_purge_fails() {
+    #[tokio::test]
+    async fn store_has_too_much_initial_data_purge_fails() {
         assert!(LruReplacement::new(
             NonZeroUsize::new(1).unwrap(),
             FailingMemoryStore::new_with_n_items(3)
         )
+        .await
         .is_err());
     }
 
-    #[test]
-    fn contains_and_keys_match_underlying_store() {
-        let mut store = lru(5);
-        let underlying_store = unsafe { &(*ptr::from_ref(&store.store)) };
+    #[tokio::test]
+    async fn should_fail() {
+        let mut store = lru(10).await;
+        store.put(1, 1).await.unwrap();
+        store.put(2, 1).await.unwrap();
+        store.put(3, 1).await.unwrap();
+        let store = std::sync::Arc::new(tokio::sync::Mutex::new(store));
 
-        store.put(0, 0);
-        assert_keys_and_contains_match(underlying_store, &store);
+        let store_copy = store.clone();
 
-        store.put(1, 1);
-        assert_keys_and_contains_match(underlying_store, &store);
+        tokio::task::spawn(async move {
+            store_copy.lock().await.get(&2).await;
+            store_copy.lock().await.get(&3).await;
+        });
 
-        store.put(1, 2);
-        assert_keys_and_contains_match(underlying_store, &store);
-
-        store.put(2, 2);
-        assert_keys_and_contains_match(underlying_store, &store);
-
-        store.put(3, 2);
-        assert_keys_and_contains_match(underlying_store, &store);
-
-        store.put(4, 2);
-        assert_keys_and_contains_match(underlying_store, &store);
-
-        store.put(4, 2);
-        assert_keys_and_contains_match(underlying_store, &store);
-
-        store.put(4, 2);
-        assert_keys_and_contains_match(underlying_store, &store);
-
-        store.put(5, 2);
-        assert_keys_and_contains_match(underlying_store, &store);
-
-        store.put(6, 2);
-        assert_keys_and_contains_match(underlying_store, &store);
-
-        store.put(5, 2);
-        assert_keys_and_contains_match(underlying_store, &store);
-
-        store.delete(&4).unwrap();
-        assert_keys_and_contains_match(underlying_store, &store);
-
-        assert!(store.delete(&0).is_ok_and(|x| x.is_none()));
-        assert_keys_and_contains_match(underlying_store, &store);
+        for _i in 1..100000 {
+            store.lock().await.get(&1).await;
+            store.lock().await.get(&2).await;
+        }
     }
 
-    fn assert_keys_and_contains_match<S, S2>(store: &S, store2: &S2)
+    #[tokio::test]
+    async fn contains_and_keys_match_underlying_store() {
+        let mut store = lru(5).await;
+        let underlying_store = unsafe { &(*ptr::from_ref(&store.store)) };
+
+        store.put(0, 0).await.unwrap();
+        assert_keys_and_contains_match(underlying_store, &store).await;
+
+        store.put(1, 1).await.unwrap();
+        assert_keys_and_contains_match(underlying_store, &store).await;
+
+        store.put(1, 2).await.unwrap();
+        assert_keys_and_contains_match(underlying_store, &store).await;
+
+        store.put(2, 2).await.unwrap();
+        assert_keys_and_contains_match(underlying_store, &store).await;
+
+        store.put(3, 2).await.unwrap();
+        assert_keys_and_contains_match(underlying_store, &store).await;
+
+        store.put(4, 2).await.unwrap();
+        assert_keys_and_contains_match(underlying_store, &store).await;
+
+        store.put(4, 2).await.unwrap();
+        assert_keys_and_contains_match(underlying_store, &store).await;
+
+        store.put(4, 2).await.unwrap();
+        assert_keys_and_contains_match(underlying_store, &store).await;
+
+        store.put(5, 2).await.unwrap();
+        assert_keys_and_contains_match(underlying_store, &store).await;
+
+        store.put(6, 2).await.unwrap();
+        assert_keys_and_contains_match(underlying_store, &store).await;
+
+        store.put(5, 2).await.unwrap();
+        assert_keys_and_contains_match(underlying_store, &store).await;
+
+        store.delete(&4).await.unwrap();
+        assert_keys_and_contains_match(underlying_store, &store).await;
+
+        assert!(store.delete(&0).await.is_ok_and(|x| x.is_none()));
+        assert_keys_and_contains_match(underlying_store, &store).await;
+    }
+
+    async fn assert_keys_and_contains_match<S, S2>(store: &S, store2: &S2)
     where
         S: Store<Key = u32>,
         S2: Store<Key = u32>,
     {
         for i in 0..7 {
-            assert_eq!(store.contains(&i), store2.contains(&i));
+            assert_eq!(store.contains(&i).await, store2.contains(&i).await);
         }
 
         assert_equal::<BTreeSet<u32>, BTreeSet<u32>>(
-            BTreeSet::from_iter(store.keys().cloned()),
-            BTreeSet::from_iter(store2.keys().cloned()),
+            BTreeSet::from_iter(store.keys().await),
+            BTreeSet::from_iter(store2.keys().await),
         );
     }
 
-    #[test]
-    fn put_exits_when_underlying_store_fails() {
+    #[tokio::test]
+    async fn put_exits_when_underlying_store_fails() {
         let mut store =
-            LruReplacement::new(NonZeroUsize::new(1).unwrap(), FailingMemoryStore::new()).unwrap();
-        store.put(1, 1);
-        store.put(2, 1);
+            LruReplacement::new(NonZeroUsize::new(1).unwrap(), FailingMemoryStore::new())
+                .await
+                .unwrap();
+        assert!(store.put(1, 1).await.is_ok());
+        assert!(store.put(2, 1).await.is_err());
 
-        assert!(store.contains(&1));
-        assert!(!store.contains(&2));
+        assert!(store.contains(&1).await);
+        assert!(!store.contains(&2).await);
     }
 
     struct FailingMemoryStore {
@@ -639,37 +822,52 @@ mod tests {
     impl Store for FailingMemoryStore {
         type Key = u32;
         type Value = u32;
-        type KeyRefIterator<'k> = vec::IntoIter<&'k u32> where
-            Self::Key: 'k,
-            Self: 'k;
-        type FlushResultIterator = vec::IntoIter<CacheBrownsResult<Option<u32>>>;
+        type KeyIterator = vec::IntoIter<u32>;
+        type FlushResultIterator = vec::IntoIter<CacheBrownsResult<u32>>;
 
-        fn get<Q: Borrow<Self::Key>>(&self, _key: &Q) -> Option<Cow<Self::Value>> {
+        async fn get<Q: Borrow<Self::Key> + Sync>(&self, _key: &Q) -> Option<Self::Value> {
             unimplemented!()
         }
 
-        fn peek<Q: Borrow<Self::Key>>(&self, _key: &Q) -> Option<Cow<Self::Value>> {
+        async fn poke<Q: Borrow<Self::Key> + Sync>(&self, _key: &Q) {
             unimplemented!()
         }
 
-        fn put(&mut self, _key: Self::Key, _value: Self::Value) {}
+        async fn peek<Q: Borrow<Self::Key> + Sync>(&self, _key: &Q) -> Option<Self::Value> {
+            unimplemented!()
+        }
 
-        fn delete<Q: Borrow<Self::Key>>(
+        async fn put(&mut self, _key: Self::Key, _value: Self::Value) -> CacheBrownsResult<()> {
+            Ok(())
+        }
+
+        async fn update(&mut self, _key: Self::Key, _value: Self::Value) -> CacheBrownsResult<()> {
+            unimplemented!()
+        }
+
+        async fn delete<Q: Borrow<Self::Key> + Sync>(
             &mut self,
             _key: &Q,
         ) -> CacheBrownsResult<Option<Self::Key>> {
             Err(Box::new(std::io::Error::new(ErrorKind::Other, "stub")))
         }
 
-        fn flush(&mut self) -> Self::FlushResultIterator {
+        async fn take<Q: Borrow<Self::Key> + Sync>(
+            &mut self,
+            _key: &Q,
+        ) -> CacheBrownsResult<Option<(Self::Key, Self::Value)>> {
             unimplemented!()
         }
 
-        fn keys(&self) -> Self::KeyRefIterator<'_> {
-            self.vec.iter().collect_vec().into_iter()
+        async fn flush(&mut self) -> Self::FlushResultIterator {
+            unimplemented!()
         }
 
-        fn contains<Q: Borrow<Self::Key>>(&self, _key: &Q) -> bool {
+        async fn keys(&self) -> Self::KeyIterator {
+            self.vec.iter().cloned().collect_vec().into_iter()
+        }
+
+        async fn contains<Q: Borrow<Self::Key> + Sync>(&self, _key: &Q) -> bool {
             unimplemented!()
         }
     }

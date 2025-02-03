@@ -1,26 +1,39 @@
 use crate::CacheBrownsResult;
+use std::borrow::Borrow;
 
 pub mod polling;
 pub mod pull;
 
-// TODO: It occurs that why this feels not useful it's just "a cache". Maybe rename, maybe a sign the other traits should inherent from it, maybe it should just be an alias?
-// actually, get is slightly different, so it's flush / stop that feel like another trait is lurking
-// could also just be that flush should be pulled out?
+#[trait_variant::make(Send)]
 pub trait Hydrator {
     type Key;
-    type Value;
+    type Value: Clone;
 
-    type FlushResultIterator: Iterator<Item = CacheBrownsResult<Option<Self::Key>>>;
+    type FlushResultIterator: Iterator<Item = CacheBrownsResult<Self::Key>>;
 
-    fn get(&mut self, key: &Self::Key) -> Option<CacheLookupSuccess<Self::Value>>;
+    // TODO: Should we have a special version of Cow where the Borrow variant can take a lock handle?
+    // This would allow us to return the borrowed data without thread safety issues if the hydrator
+    // has internal locking, like it does in the case of Polling. Downsides are a custom type, more
+    // complexity. Upside is that having to copy a value every time you use it is a bit yikes. Is it
+    // better to just say yeah, it's expensive so you should use Arc if you care about this? Pub-sub
+    // will also have this issue. The question is what balance to have, because either is adding
+    // slight overhead for the non-threaded hydrators like Pull. With custom Cow, that overhead is
+    // just passing a None around though so pretty light. Another downside is that letting external
+    // users hold references means they're exposed to a more complicated borrow checker interaction.
+    // Is it already the case in some other respect though? Is the ref based version and more
+    // cumbersome than any existing instances?
+    async fn get<Q: Borrow<Self::Key> + Sync>(
+        &self,
+        key: &Q,
+    ) -> Option<CacheLookupSuccess<Self::Value>>;
 
-    fn flush(&mut self) -> Self::FlushResultIterator;
+    async fn flush(&self) -> Self::FlushResultIterator;
 
-    fn stop_tracking(&mut self, key: &Self::Key) -> CacheBrownsResult<()>;
+    async fn stop_tracking<Q: Borrow<Self::Key> + Sync>(&self, key: &Q) -> CacheBrownsResult<()>;
 }
 
 #[derive(Debug, Eq, PartialEq)]
-pub enum CacheLookupSuccess<Value> {
+pub enum CacheLookupSuccess<Value: Clone> {
     /// Value was not present in the underlying store and had to be fetched from source of record.
     Miss(Value),
 
@@ -34,11 +47,11 @@ pub enum CacheLookupSuccess<Value> {
     Hit(Value),
 }
 
-impl<Value> CacheLookupSuccess<Value> {
-    pub fn new(store_result: StoreResult, hydrated: bool, value: Value) -> Self {
+impl<Value: Clone> CacheLookupSuccess<Value> {
+    pub fn new(store_result: StoreResult, did_fetch_from_sor: bool, value: Value) -> Self {
         match store_result {
             StoreResult::Invalid => {
-                if hydrated {
+                if did_fetch_from_sor {
                     CacheLookupSuccess::Refresh(value)
                 } else {
                     CacheLookupSuccess::Stale(value)

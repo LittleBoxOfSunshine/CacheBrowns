@@ -1,9 +1,6 @@
-use crate::store::Store;
-use crate::CacheBrownsResult;
+use crate::{store::Store, CacheBrownsResult};
 use itertools::Itertools;
-use std::borrow::{Borrow, Cow};
-use std::collections::{hash_map, HashMap};
-use std::vec;
+use std::{borrow::Borrow, collections::HashMap, vec};
 
 /// A [`MemoryStore`] is a wrapper around [`HashMap`] that satisfies [`Store`].
 #[derive(Default)]
@@ -25,73 +22,92 @@ impl<Key, Value> From<HashMap<Key, Value>> for MemoryStore<Key, Value> {
     }
 }
 
-impl<Key: Eq + std::hash::Hash, Value: Clone> Store for MemoryStore<Key, Value> {
+impl<Key: Clone + Eq + std::hash::Hash + Send + Sync, Value: Clone + Send + Sync> Store
+    for MemoryStore<Key, Value>
+{
     type Key = Key;
     type Value = Value;
-    type KeyRefIterator<'k> = hash_map::Keys<'k, Key, Value> where Key: 'k, Value: 'k;
-    type FlushResultIterator = vec::IntoIter<CacheBrownsResult<Option<Key>>>;
+    type KeyIterator = vec::IntoIter<Key>;
+    type FlushResultIterator = vec::IntoIter<CacheBrownsResult<Key>>;
 
-    fn get<Q: Borrow<Key>>(&self, key: &Q) -> Option<Cow<Value>> {
-        self.peek(key)
+    async fn get<Q: Borrow<Key> + Sync>(&self, key: &Q) -> Option<Self::Value> {
+        self.peek(key).await
     }
 
-    fn peek<Q: Borrow<Key>>(&self, key: &Q) -> Option<Cow<Value>> {
-        self.data.get(key.borrow()).map(|v| Cow::Borrowed(v))
+    async fn poke<Q: Borrow<Self::Key> + Sync>(&self, _key: &Q) {}
+
+    async fn peek<Q: Borrow<Key> + Sync>(&self, key: &Q) -> Option<Value> {
+        self.data.get(key.borrow()).cloned()
     }
 
-    fn put(&mut self, key: Key, value: Value) {
+    async fn put(&mut self, key: Self::Key, value: Self::Value) -> CacheBrownsResult<()> {
         self.data.insert(key, value);
+        Ok(())
     }
 
-    fn delete<Q: Borrow<Self::Key>>(&mut self, key: &Q) -> CacheBrownsResult<Option<Key>> {
+    async fn update(&mut self, key: Self::Key, value: Self::Value) -> CacheBrownsResult<()> {
+        self.data.entry(key).and_modify(|v| *v = value);
+        Ok(())
+    }
+
+    async fn delete<Q: Borrow<Self::Key> + Sync>(
+        &mut self,
+        key: &Q,
+    ) -> CacheBrownsResult<Option<Key>> {
         Ok(self.data.remove_entry(key.borrow()).map(|(k, _v)| k))
     }
 
-    fn flush(&mut self) -> Self::FlushResultIterator {
+    async fn take<Q: Borrow<Self::Key> + Sync>(
+        &mut self,
+        key: &Q,
+    ) -> CacheBrownsResult<Option<(Self::Key, Self::Value)>> {
+        Ok(self.data.remove_entry(key.borrow()))
+    }
+
+    async fn flush(&mut self) -> Self::FlushResultIterator {
         self.data
             .drain()
-            .map(|(k, _v)| Ok(Some(k)))
+            .map(|(k, _v)| Ok(k))
             .collect_vec()
             .into_iter()
     }
 
-    fn keys(&self) -> Self::KeyRefIterator<'_> {
-        self.data.keys()
+    async fn keys(&self) -> Self::KeyIterator {
+        self.data.keys().cloned().collect_vec().into_iter()
     }
 
-    fn contains<Q: Borrow<Self::Key>>(&self, key: &Q) -> bool {
+    async fn contains<Q: Borrow<Self::Key> + Sync>(&self, key: &Q) -> bool {
         self.data.contains_key(key.borrow())
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::store::memory::MemoryStore;
-    use crate::store::Store;
+    use crate::store::{memory::MemoryStore, Store};
     use std::collections::HashMap;
 
-    #[test]
-    fn flush() {
+    #[tokio::test]
+    async fn flush() {
         let mut store = MemoryStore::new();
-        store.put(&1, 1);
-        store.put(&2, 1);
-        store.put(&3, 1);
+        store.put(&1, 1).await.unwrap();
+        store.put(&2, 1).await.unwrap();
+        store.put(&3, 1).await.unwrap();
 
-        assert_eq!(3, store.keys().len());
+        assert_eq!(3, store.keys().await.len());
 
-        store.flush();
+        store.flush().await;
 
-        assert_eq!(0, store.keys().len());
+        assert_eq!(0, store.keys().await.len());
     }
 
-    #[test]
-    fn from_hashmap() {
+    #[tokio::test]
+    async fn from_hashmap() {
         let mut map = HashMap::new();
         map.insert(1, 1);
 
         let store = MemoryStore::from(map);
 
-        assert_eq!(1, *store.get(&1).unwrap());
-        assert_eq!(1, store.keys().len())
+        assert_eq!(1, store.get(&1).await.unwrap());
+        assert_eq!(1, store.keys().await.len())
     }
 }
