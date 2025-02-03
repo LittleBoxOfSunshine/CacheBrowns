@@ -26,3 +26,4 @@ uuid = { version = "1.11.0", features = ["v4"] }
 [dev-dependencies]
 mockall = "0.13.1"
 tempdir = "0.3.7"
+test-case = "3.3.1"

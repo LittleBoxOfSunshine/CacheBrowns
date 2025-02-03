@@ -179,7 +179,10 @@ where
         }
     }
 
-    fn remove<Q: Borrow<<LruReplacement<Key, Value, S> as Store>::Key>>(&self, key: &Q) -> bool {
+    fn remove_from_usage_order<Q: Borrow<<LruReplacement<Key, Value, S> as Store>::Key>>(
+        &self,
+        key: &Q,
+    ) -> bool {
         if let Some(entry) = self.index.borrow_mut().remove(&KeyRef::from(key)) {
             let entry = entry.as_ptr();
             self.detach(entry);
@@ -256,11 +259,11 @@ where
             .borrow_mut()
             .drain()
             .for_each(|(_, entry)| unsafe {
-                let mut entry = *Box::from_raw(entry.as_ptr());
-                // SAFETY: In order for this to be in the map, it has a value.
-                entry.key.assume_init_drop();
+                let _ = Box::from_raw(entry.as_ptr());
             });
 
+        // These were allocated at construction time unconditionally. Never are deleted during
+        // mutations. Must be freed now.
         unsafe {
             let _ = Box::from_raw(self.head);
             let _ = Box::from_raw(self.tail);
@@ -281,7 +284,7 @@ where
     type KeyIterator = vec::IntoIter<Key>;
 
     // Because flush can fail, we can't rely on our own iterator as a potential optimization.
-    type FlushResultIterator = S::FlushResultIterator;
+    type FlushResultIterator = vec::IntoIter<CacheBrownsResult<Self::Key>>;
 
     async fn get<Q: Borrow<Self::Key> + Sync>(&self, key: &Q) -> Option<Self::Value> {
         let value = self.store.get(key).await;
@@ -330,16 +333,25 @@ where
         &mut self,
         key: &Q,
     ) -> CacheBrownsResult<Option<Self::Key>> {
-        if self.remove(key) {
-            return self.store.delete(key).await;
-        }
-
-        Ok(None)
+        self.store.delete(key).await.map(|key| {
+            key.inspect(|key| {
+                self.remove_from_usage_order(&key);
+            })
+        })
     }
 
     async fn flush(&mut self) -> Self::FlushResultIterator {
-        self.index.borrow_mut().clear();
-        self.store.flush().await
+        let mut flush_results = Vec::new();
+        flush_results.reserve_exact(self.index.borrow().len());
+
+        // Remove anything that was successfully deleted from usage order
+        for result in self.store.flush().await {
+            flush_results.push(result.inspect(|key| {
+                self.remove_from_usage_order(&key);
+            }));
+        }
+
+        flush_results.into_iter()
     }
 
     async fn keys(&self) -> Self::KeyIterator {
@@ -371,6 +383,7 @@ where
 
 #[cfg(test)]
 mod tests {
+    use crate::store::test_helpers::{MockStore, MockStoreWrapper};
     use crate::{
         store::{
             memory::MemoryStore,
@@ -384,6 +397,7 @@ mod tests {
         borrow::Borrow, collections::BTreeSet, fmt::Debug, hash::Hash, io::ErrorKind,
         num::NonZeroUsize, ptr, vec,
     };
+    use test_case::test_case;
 
     async fn lru(max_capacity: usize) -> LruReplacement<u32, u32, MemoryStore<u32, u32>> {
         let store = MemoryStore::new();
@@ -539,6 +553,9 @@ mod tests {
     #[tokio::test]
     async fn flush_no_index_and_propagates() {
         let mut store = lru(3).await;
+        // Confirm flush on empty store causes no issues
+        assert_eq!(0, store.flush().await.count());
+
         store.put(0, 1).await.unwrap();
         store.put(1, 1).await.unwrap();
         store.put(2, 1).await.unwrap();
@@ -547,6 +564,95 @@ mod tests {
         assert_equal(BTreeSet::from_iter(vec![0, 1, 2]), deleted_keys);
         assert_eq!(0, store.index.borrow().len());
         assert_eq!(0, store.store.keys().await.len());
+    }
+
+    #[tokio::test]
+    async fn delete_fails_no_index_change() {
+        let mut mock = MockStore::new();
+        mock.expect_keys().returning(|| vec![].into_iter());
+        mock.expect_put().once().returning(|_, _| Ok(()));
+        mock.expect_delete().once().returning(|_| {
+            Err(Box::new(std::io::Error::new(
+                ErrorKind::Interrupted,
+                "stub",
+            )))
+        });
+
+        let mut store =
+            LruReplacement::new(NonZeroUsize::new(1).unwrap(), MockStoreWrapper::new(mock))
+                .await
+                .unwrap();
+        assert!(store.index.borrow().is_empty());
+
+        store.put(0, 1).await.unwrap();
+        assert!(!store.index.borrow().is_empty());
+
+        store.delete(&0).await.unwrap_err();
+        assert!(!store.index.borrow().is_empty());
+    }
+
+    const KEY_HACK_TABLE: [&i32; 5] = [&0, &1, &2, &3, &4];
+
+    #[tokio::test]
+    #[test_case(vec![false]; "single_failure")]
+    #[test_case(vec![true, false]; "first_fails")]
+    #[test_case(vec![false, true]; "last_fails")]
+    #[test_case(vec![true, false, false, false, true]; "several_fail")]
+    #[test_case(vec![true, true, false, false]; "alternate_several_fail")]
+    async fn flush_partially_fails_partial_index_change(results: Vec<bool>) {
+        let enumerated_keys = results.iter().enumerate();
+        let all_keys = enumerated_keys.clone().map(|(i, _)| i).collect_vec();
+        let expected_post_flush_index = enumerated_keys
+            .filter(|x| !*x.1)
+            .map(|x| x.0 as i32)
+            .sorted()
+            .collect_vec();
+
+        let mut mock = MockStore::new();
+        mock.expect_keys().returning(move || {
+            all_keys
+                .iter()
+                .map(|k| KEY_HACK_TABLE[*k])
+                .collect_vec()
+                .into_iter()
+        });
+
+        mock.expect_flush().returning(move || {
+            results
+                .iter()
+                .enumerate()
+                .map(|(key, is_ok)| {
+                    if *is_ok {
+                        Ok(key as i32)
+                    } else {
+                        let error: CacheBrownsResult<i32> =
+                            Err(Box::new(std::io::Error::new(ErrorKind::Other, "")));
+                        error
+                    }
+                })
+                .collect_vec()
+                .into_iter()
+        });
+
+        let mut lru =
+            LruReplacement::new(NonZeroUsize::new(10).unwrap(), MockStoreWrapper::new(mock))
+                .await
+                .unwrap();
+        lru.flush().await;
+
+        let results = expected_post_flush_index.iter().zip_eq(
+            lru.index
+                .borrow()
+                .keys()
+                .map(|k| unsafe { *k.key })
+                .sorted(),
+        );
+
+        println!("{:?}", results);
+
+        for result in results {
+            assert_eq!(*result.0, result.1);
+        }
     }
 
     #[tokio::test]

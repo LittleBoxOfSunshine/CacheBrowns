@@ -92,6 +92,7 @@ pub trait Store {
 
     // TODO: Why was it ok not to have keys returned with failures? Presumably was an optimization and/or avoid Clone on Key
     // TODO: Should it be a multimap? This is useful for Tiered store but redundant on individual stores
+    // Item = (Self::Key, CacheBrownsResult<()> likely makes more sense here.
     type FlushResultIterator: Iterator<Item = CacheBrownsResult<Self::Key>> + Send;
 
     /// Get a copy of the value associated with the key, if it exists. This function must induce any
@@ -168,7 +169,7 @@ pub trait Store {
     /// reads to ensure that correctness is maintained. While the data won't be invalid, it will be
     /// unclear to the user it's still present and can become a memory leak.
     ///
-    /// Does not return `Option<Value>`, because getting the value may be expensive. If you want the
+    /// Does not return `CacheBrownsResult<Value>`, because getting the value may be expensive. If you want the
     /// deleted value, use [`Store::take`].
     async fn delete<Q: Borrow<Self::Key> + Sync>(
         &mut self,
